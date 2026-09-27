@@ -24,14 +24,12 @@ extensions:
       Creates and switches to a feature branch for each Spec Kit command that
       produces versioned work.
     status: registered
-    enabled: false
-    disabled_reason: >-
-      This directory is not yet a git repository, so branch creation would fail
-      on every dispatch. Enable after `git init` and after adding the
-      destination remote (https://github.com/Saif-Ali-109/Enterprise-Intelligence-RAG).
-      Note: the repository is named after the intended project, while this
-      working directory is still called Custom-RAG; decide whether to rename
-      before the first push.
+    enabled: true
+    enabled_note: >-
+      Enabled 2026-09-28. The directory is now a git repository, renamed to
+      match the destination project, with the remote set to
+      https://github.com/Saif-Ali-109/Enterprise-Intelligence-RAG. The default
+      branch is `main`; the first commit is 511a606.
 
 hooks:
   # --- constitution -------------------------------------------------------
