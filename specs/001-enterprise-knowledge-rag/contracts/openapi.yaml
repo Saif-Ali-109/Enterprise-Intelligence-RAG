@@ -1,0 +1,1252 @@
+openapi: 3.1.0
+
+info:
+  title: Enterprise Knowledge Intelligence RAG — Backend API
+  version: 1.0.0
+  summary: Evidence-grounded question answering over publicly accessible documentation.
+  description: |
+    An independent technical demonstration. Not affiliated with, sponsored by, or endorsed
+    by Atlassian or any documentation publisher. Every source returned by this API links back
+    to the original publisher page (FR-049, FR-050).
+
+    ## Answering
+
+    `POST /chat/stream` is the primary answering interface: it returns a Server-Sent Events
+    stream of pipeline stage events. `POST /chat` returns the same result as a single JSON
+    object. Both execute the identical pipeline; the stream is transport, not a different
+    code path, so the evaluation runner uses the non-streaming form and measured metrics
+    reflect the same work the user sees.
+
+    ## Model reasoning
+
+    No endpoint, response, or event in this API exposes model reasoning or internal
+    deliberation (FR-034). Provider calls disable reasoning exposure explicitly; see
+    research R-014. The response schemas below are exhaustive and closed
+    (`additionalProperties: false`), so a new field cannot appear without a contract change.
+
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Local development
+
+tags:
+  - name: chat
+    description: Question submission and answer retrieval
+  - name: sources
+    description: Registered documentation entry points
+  - name: documents
+    description: Ingested pages and their retrievable units
+  - name: crawl-jobs
+    description: Crawl runs and their outcomes
+  - name: evaluations
+    description: Curated question set, runs, and measured metrics
+  - name: system
+    description: Health and operational configuration
+
+paths:
+  /chat:
+    post:
+      tags: [chat]
+      summary: Ask a question and receive a complete grounded answer
+      operationId: askQuestion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AskRequest'
+      responses:
+        '200':
+          description: The pipeline completed. The answer may be a refusal.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AskResponse'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/VectorServiceUnavailable' }
+        '502': { $ref: '#/components/responses/ProviderError' }
+
+  /chat/stream:
+    post:
+      tags: [chat]
+      summary: Ask a question and receive pipeline progress as Server-Sent Events
+      operationId: askQuestionStream
+      parameters:
+        - $ref: '#/components/parameters/AcceptEventStream'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AskRequest'
+      responses:
+        '200':
+          description: |
+            An event stream. Emits the eight events of FR-035 in fixed order, then
+            terminates with `data: [DONE]`. An error occurring after the stream opens is
+            delivered as a terminal `error` event, not as an HTTP status.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: 'no-cache, no-transform' }
+            X-Accel-Buffering:
+              schema: { type: string, const: 'no' }
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                refused:
+                  summary: A refusal, with the searched scope reported
+                  value: |
+                    event: query_received
+                    data: {"request_id":"0f3c...","question":"How do I set up billing?"}
+
+                    event: query_analyzed
+                    data: {"request_id":"0f3c...","detected_product":"jira","detected_category":"billing","classification_confidence":{"product":0.91,"category":0.88,"intent":0.94},"rewrite_queries":["How do I set up billing?"]}
+
+                    event: retrieval_started
+                    data: {"request_id":"0f3c...","candidate_pool":12}
+
+                    event: retrieval_completed
+                    data: {"request_id":"0f3c...","candidates_retrieved":0,"applied_filters":{"product":{"$in":["jira"]}}}
+
+                    event: reranking_completed
+                    data: {"request_id":"0f3c...","candidates_reranked":0}
+
+                    event: generation_started
+                    data: {"request_id":"0f3c...","evidence_count":0}
+
+                    event: citation_validation
+                    data: {"request_id":"0f3c...","citations_valid":0,"citations_stripped":0,"citations_repaired":0}
+
+                    event: answer_completed
+                    data: {"request_id":"0f3c...","outcome":"refused","answer":null,"refusal_reason":"INSUFFICIENT_EVIDENCE","searched":{"queries":["How do I set up billing?"],"products":["jira"],"candidates_retrieved":0},"leads":[]}
+
+                    data: [DONE]
+
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/VectorServiceUnavailable' }
+
+  /chat/{request_id}:
+    get:
+      tags: [chat]
+      summary: Retrieve a previously answered question, including its inspection trace
+      operationId: getAnswer
+      description: |
+        Replays a stored answer. Available for answers created with `inspect: true`; for
+        others the trace fields are `null`. This is how a past answer remains inspectable
+        without persisting every candidate for every question.
+      parameters:
+        - $ref: '#/components/parameters/RequestIdPath'
+      responses:
+        '200':
+          description: The stored answer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AskResponse'
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /sources:
+    get:
+      tags: [sources]
+      summary: List registered sources
+      operationId: listSources
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: enabled
+          in: query
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: Registered sources with live counts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total, limit, offset]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Source' }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+    post:
+      tags: [sources]
+      summary: Register a source and start its first crawl
+      description: |
+        The URL is validated against the address guard **before any connection is opened**
+        (FR-044). A disallowed address is rejected, never fetched. Re-registering an existing
+        `start_url` returns `200` with the existing source.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SourceCreate' }
+      responses:
+        '201':
+          description: Registered; crawl started
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [source, crawl_job]
+                properties:
+                  source: { $ref: '#/components/schemas/Source' }
+                  crawl_job: { $ref: '#/components/schemas/CrawlJob' }
+        '200':
+          description: Already registered; the existing source is returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Source' }
+        '400':
+          description: The address was refused (`SSRF_BLOCKED` or `INVALID_URL`) or input failed validation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: The site's directives disallow the starting URL
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /sources/{source_id}:
+    parameters:
+      - $ref: '#/components/parameters/SourceIdPath'
+    get:
+      tags: [sources]
+      summary: Retrieve a source
+      operationId: getSource
+      responses:
+        '200':
+          description: The source
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Source' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [sources]
+      summary: Update a source, including enabling or disabling it
+      operationId: updateSource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SourceUpdate' }
+      responses:
+        '200':
+          description: The updated source
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Source' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [sources]
+      summary: Remove a source and all of its content
+      description: |
+        Removes the registry rows **and** the indexed vectors, so the content can no longer
+        be retrieved (FR-031). Documents are tombstoned before their vectors are deleted, so
+        an in-flight crawl cannot resurrect them (FR-056). Idempotent.
+      responses:
+        '204': { description: Removed }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /sources/{source_id}/crawl:
+    post:
+      tags: [sources, crawl-jobs]
+      summary: Request a re-crawl of a source
+      operationId: crawlSource
+      parameters:
+        - $ref: '#/components/parameters/SourceIdPath'
+      responses:
+        '202':
+          description: Crawl accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CrawlJob' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: A crawl for this source is already in progress; the message names the job
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                alreadyRunning:
+                  value:
+                    error:
+                      code: CRAWL_ALREADY_RUNNING
+                      message: A crawl is already running for this source (job 8a93f0c2-1d4e-4a7b-9c3f-6b1e2d4a5f70). Wait for it to finish or cancel it.
+                      request_id: 0f3c1d2a-6b4e-4c1f-9a77-2b8e5d0c4a11
+                      details: { crawl_job_id: 8a93f0c2-1d4e-4a7b-9c3f-6b1e2d4a5f70 }
+
+  /documents:
+    get:
+      tags: [documents]
+      summary: Browse indexed documents
+      operationId: listDocuments
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: source_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: state
+          in: query
+          schema: { $ref: '#/components/schemas/DocumentState' }
+        - name: product
+          in: query
+          schema: { type: string }
+        - name: category
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Matching documents
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total, limit, offset]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Document' }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+
+  /documents/{document_id}:
+    parameters:
+      - $ref: '#/components/parameters/DocumentIdPath'
+    get:
+      tags: [documents]
+      summary: Retrieve a document
+      operationId: getDocument
+      responses:
+        '200':
+          description: The document
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Document' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [documents]
+      summary: Delete a document and remove its indexed content
+      description: |
+        Tombstones the document, then removes its vectors, so the content is unreachable in
+        subsequent answers (FR-031, FR-056). Idempotent.
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /documents/{document_id}/units:
+    get:
+      tags: [documents]
+      summary: List a document's retrievable units
+      description: |
+        Returns provenance for each unit — heading path, ordinals, token count, block types —
+        but not the unit text, which is held in the vector store. This is the view that lets
+        an operator confirm structure-aware chunking without a content dump.
+      operationId: listDocumentUnits
+      parameters:
+        - $ref: '#/components/parameters/DocumentIdPath'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: The document's units in ordinal order
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total, limit, offset]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/DocumentUnit' }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /crawl-jobs:
+    get:
+      tags: [crawl-jobs]
+      summary: List crawl jobs
+      operationId: listCrawlJobs
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: source_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/CrawlJobStatus' }
+      responses:
+        '200':
+          description: Matching crawl jobs
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total, limit, offset]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/CrawlJob' }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+
+  /crawl-jobs/{job_id}:
+    get:
+      tags: [crawl-jobs]
+      summary: Retrieve a crawl job
+      operationId: getCrawlJob
+      parameters:
+        - $ref: '#/components/parameters/JobIdPath'
+      responses:
+        '200':
+          description: The crawl job
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CrawlJob' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /evaluations/dataset:
+    get:
+      tags: [evaluations]
+      summary: Retrieve the curated question set
+      operationId: getEvaluationDataset
+      responses:
+        '200':
+          description: |
+            The dataset, conforming to evaluation-dataset.schema.json. Contains no source
+            URLs by construction — grading is by topic coverage (FR-063).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationDataset'
+
+  /evaluations/runs:
+    get:
+      tags: [evaluations]
+      summary: List evaluation runs
+      description: Returns an empty collection when no run exists. It never returns placeholder
+        metrics (FR-037).
+      operationId: listEvaluationRuns
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Evaluation runs, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total, limit, offset]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/EvaluationRun' }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+    post:
+      tags: [evaluations]
+      summary: Start an evaluation run
+      description: |
+        Asynchronous — a 30-plus question run makes a synchronous request untenable. Progress
+        is polled on the run resource. All displayed metrics are computed from this run
+        (FR-036).
+      responses:
+        '202':
+          description: Run accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EvaluationRun' }
+        '409':
+          description: A run is already in progress
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503': { $ref: '#/components/responses/VectorServiceUnavailable' }
+
+  /evaluations/runs/{run_id}:
+    get:
+      tags: [evaluations]
+      summary: Retrieve an evaluation run with its metrics and gate outcome
+      operationId: getEvaluationRun
+      parameters:
+        - $ref: '#/components/parameters/RunIdPath'
+      responses:
+        '200':
+          description: The run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EvaluationRun' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /evaluations/runs/{run_id}/results:
+    get:
+      tags: [evaluations]
+      summary: Per-question results for a run
+      description: |
+        The per-question detail behind the aggregate metrics, including the
+        `fabricated_fact_count` and `invalid_citation_count` figures that the absolute gates
+        depend on. Retrieval metrics are `null` for deliberately unsupported questions —
+        not applicable, not zero.
+      operationId: listEvaluationResults
+      parameters:
+        - $ref: '#/components/parameters/RunIdPath'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Per-question results
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total, limit, offset]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/EvaluationResult' }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /health:
+    get:
+      tags: [system]
+      summary: Liveness and dependency readiness
+      operationId: getHealth
+      security: []
+      responses:
+        '200':
+          description: |
+            Service state. `vector_store` and `language_model` report `ok`, `degraded`, or
+            `unavailable` independently, so a vector outage is visible as a vector outage
+            rather than as a generic failure.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [status, dependencies]
+                properties:
+                  status: { type: string, enum: [ok, degraded, unavailable] }
+                  version: { type: string }
+                  dependencies:
+                    type: object
+                    additionalProperties: false
+                    required: [database, vector_store, language_model]
+                    properties:
+                      database: { $ref: '#/components/schemas/DependencyStatus' }
+                      vector_store: { $ref: '#/components/schemas/DependencyStatus' }
+                      language_model: { $ref: '#/components/schemas/DependencyStatus' }
+
+  /config:
+    get:
+      tags: [system]
+      summary: Operational configuration, with no secret values
+      description: |
+        Returns the settings that affect retrieval and generation so an operator can see why
+        the system behaves as it does. **Secret values are never returned** — a configured
+        key is reported as `configured: true` with no value (FR-042).
+      operationId: getConfig
+      responses:
+        '200':
+          description: Effective configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [retrieval, generation, index, corpus, secrets]
+                properties:
+                  retrieval:
+                    type: object
+                    additionalProperties: false
+                    required: [candidate_pool, rerank_top_n, evidence_min, evidence_max, filters_enabled]
+                    properties:
+                      candidate_pool: { type: integer, examples: [12] }
+                      rerank_top_n: { type: integer, examples: [5] }
+                      evidence_min: { type: integer, examples: [3] }
+                      evidence_max: { type: integer, examples: [6] }
+                      min_rerank_score: { type: number }
+                      min_evidence_score: { type: number }
+                      filters_enabled: { type: boolean }
+                  generation:
+                    type: object
+                    additionalProperties: false
+                    required: [provider, model, max_attempts, reasoning_exposed]
+                    properties:
+                      provider: { type: string, examples: ['groq'] }
+                      model: { type: string, examples: ['openai/gpt-oss-120b'] }
+                      classification_model: { type: string }
+                      max_attempts: { type: integer, examples: [2] }
+                      reasoning_exposed:
+                        type: boolean
+                        const: false
+                        description: Always false. Present so an operator can verify FR-034 holds in the running system.
+                  index:
+                    type: object
+                    additionalProperties: false
+                    required: [name, namespace, embed_model, dimension_source]
+                    properties:
+                      name: { type: string }
+                      namespace: { type: string }
+                      embed_model: { type: string }
+                      dimension_source:
+                        type: string
+                        const: service
+                        description: Dimensions are read from service configuration, never hard-coded (Principle VII).
+                      rerank_model: { type: string }
+                  corpus:
+                    type: object
+                    additionalProperties: false
+                    required: [source_count, document_count, unit_count, allowed_domains]
+                    properties:
+                      source_count: { type: integer }
+                      document_count: { type: integer }
+                      unit_count: { type: integer }
+                      allowed_domains: { type: array, items: { type: string } }
+                  secrets:
+                    type: object
+                    additionalProperties: false
+                    description: Presence only. No value field exists on any entry.
+                    properties:
+                      pinecone_api_key: { $ref: '#/components/schemas/SecretPresence' }
+                      groq_api_key: { $ref: '#/components/schemas/SecretPresence' }
+                      database_url: { $ref: '#/components/schemas/SecretPresence' }
+
+components:
+  parameters:
+    RequestIdPath:
+      name: request_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    SourceIdPath:
+      name: source_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    DocumentIdPath:
+      name: document_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    JobIdPath:
+      name: job_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    RunIdPath:
+      name: run_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    Offset:
+      name: offset
+      in: query
+      schema: { type: integer, minimum: 0, default: 0 }
+    AcceptEventStream:
+      name: Accept
+      in: header
+      required: false
+      schema: { type: string, examples: ['text/event-stream'] }
+
+  responses:
+    ValidationError:
+      description: Input failed validation or exceeded a bound
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: No such resource
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Rate limit exceeded
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ProviderError:
+      description: The language model provider failed or returned unusable output
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    VectorServiceUnavailable:
+      description: |
+        The embedding or vector search service is unreachable. No answer is produced and no
+        weaker retrieval is substituted (FR-061, FR-062).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              enum:
+                - VALIDATION_ERROR
+                - SSRF_BLOCKED
+                - INVALID_URL
+                - ROBOTS_DISALLOWED
+                - UNAUTHORIZED
+                - NOT_FOUND
+                - CONFLICT
+                - CRAWL_ALREADY_RUNNING
+                - DOCUMENT_DELETED
+                - RATE_LIMITED
+                - PROVIDER_ERROR
+                - PROVIDER_RATE_LIMITED
+                - VECTOR_SERVICE_UNAVAILABLE
+                - INTERNAL_ERROR
+            message: { type: string }
+            request_id: { type: string, format: uuid }
+            details:
+              type: object
+              additionalProperties: true
+              description: Field names and enumerated values only. Never free-form user input.
+
+    AskRequest:
+      type: object
+      additionalProperties: false
+      required: [question]
+      properties:
+        question:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: Bounded length (FR-043). Content is treated as a question to answer from evidence, never as an instruction (FR-034, edge case).
+        inspect:
+          type: boolean
+          default: false
+          description: When true, the full deterministic pipeline trace is captured and returned (FR-033). No reasoning is captured either way.
+        history:
+          type: array
+          maxItems: 10
+          description: Prior turns for follow-up questions, most recent last.
+          items:
+            type: object
+            additionalProperties: false
+            required: [role, content]
+            properties:
+              role: { type: string, enum: [user, assistant] }
+              content: { type: string, maxLength: 8000 }
+
+    AskResponse:
+      type: object
+      additionalProperties: false
+      required: [request_id, outcome, citations, timing]
+      description: |
+        `outcome` is `answered` or `refused`. A refusal is a successful response, not an
+        error: `answer` is `null`, `refusal_reason` is populated, and `citations` is empty
+        (FR-008). The same shape serves both, so a client has one code path.
+      properties:
+        request_id: { type: string, format: uuid }
+        question: { type: string }
+        outcome: { type: string, enum: [answered, refused] }
+        answer:
+          type: [string, 'null']
+          description: '`null` when refused. Conditional phrasing from the source is preserved (FR-006).'
+        refusal_reason:
+          type: [string, 'null']
+          enum: [INSUFFICIENT_EVIDENCE, UNSUPPORTED_INTENT, TOO_AMBIGUOUS, GENERATION_FAILED, null]
+        searched:
+          $ref: '#/components/schemas/SearchedScope'
+        leads:
+          type: array
+          description: |
+            Weakly related sources offered as clearly-labelled leads on a refusal. Marked
+            insufficient; never presented as support for a claim (FR-008).
+          items: { $ref: '#/components/schemas/Lead' }
+        citations:
+          type: array
+          description: Every citation on this response is validated. An invalid one is stripped or repaired before the response is built (FR-005).
+          items: { $ref: '#/components/schemas/Citation' }
+        query_analysis:
+          $ref: '#/components/schemas/QueryAnalysis'
+        timing:
+          type: object
+          additionalProperties: false
+          required: [total_ms]
+          properties:
+            total_ms: { type: integer }
+            first_event_ms:
+              type: integer
+              description: Time to the first progress event. SC-016 requires this under 2000ms.
+            stages_ms:
+              type: object
+              additionalProperties: { type: integer }
+              description: Per-stage latency. Keys are the pipeline stage names.
+        trace:
+          $ref: '#/components/schemas/PipelineTrace'
+
+    SearchedScope:
+      type: object
+      additionalProperties: false
+      description: What was searched, so a refusal is actionable rather than opaque (FR-008).
+      required: [queries, candidates_retrieved]
+      properties:
+        queries: { type: array, items: { type: string } }
+        products: { type: array, items: { type: [string, 'null'] } }
+        applied_filters: { type: object, additionalProperties: true }
+        candidates_retrieved: { type: integer }
+        candidates_reranked: { type: integer }
+        evidence_selected: { type: integer }
+
+    Lead:
+      type: object
+      additionalProperties: false
+      required: [source_url, title, insufficient]
+      properties:
+        source_url: { type: string, format: uri }
+        title: { type: string }
+        heading_path: { type: array, items: { type: string } }
+        relevance: { type: number, minimum: 0, maximum: 1 }
+        insufficient:
+          type: boolean
+          const: true
+          description: Always true. A lead is never evidence.
+
+    Citation:
+      type: object
+      additionalProperties: false
+      required: [rank, document_id, unit_id, source_url, title, validation_state]
+      description: |
+        The link is looked up from the registry, never taken from model output (FR-003,
+        FR-050). Every citation reaching a client has passed deterministic validation.
+      properties:
+        rank: { type: integer, minimum: 1 }
+        document_id: { type: string, format: uuid }
+        unit_id: { type: string, format: uuid }
+        source_url: { type: string, format: uri, description: Resolves to the original publisher page. }
+        title: { type: string }
+        product: { type: [string, 'null'] }
+        category: { type: [string, 'null'] }
+        heading_path: { type: array, items: { type: string } }
+        quote: { type: string, description: The supporting span, shown for inspection. }
+        retrieval_score: { type: [number, 'null'] }
+        rerank_score: { type: [number, 'null'] }
+        validation_state: { type: string, enum: [valid, stripped, repaired] }
+        validation_note: { type: [string, 'null'] }
+
+    QueryAnalysis:
+      type: object
+      additionalProperties: false
+      required: [original, confidence, rewrite_queries]
+      properties:
+        original: { type: string }
+        normalized: { type: string }
+        detected_product: { type: [string, 'null'] }
+        detected_category: { type: [string, 'null'] }
+        intent: { type: [string, 'null'] }
+        confidence:
+          type: object
+          additionalProperties: false
+          description: Per-field confidence. A low value suppresses filtering rather than narrowing it (FR-010).
+          properties:
+            product: { type: number, minimum: 0, maximum: 1 }
+            category: { type: number, minimum: 0, maximum: 1 }
+            intent: { type: number, minimum: 0, maximum: 1 }
+        entities: { type: array, items: { type: string } }
+        rewrite_queries:
+          type: array
+          items: { type: string }
+          description: One per targeted aspect; more than one for multi-part or cross-product questions (FR-013).
+        ambiguity_note:
+          type: [string, 'null']
+          description: Set when the question spans products. The ambiguity is stated, not silently resolved.
+
+    PipelineTrace:
+      type: object
+      additionalProperties: false
+      description: |
+        The deterministic inspection trace (FR-033). Populated only when `inspect` was true.
+        Closed to additional properties: it has no reasoning, thought, or deliberation field,
+        and cannot grow one without a contract change (FR-034).
+      required: [stages]
+      properties:
+        stages:
+          type: object
+          additionalProperties: false
+          required: [analysis, retrieval, rerank, evidence, citations]
+          properties:
+            analysis: { $ref: '#/components/schemas/QueryAnalysis' }
+            retrieval:
+              type: object
+              additionalProperties: false
+              required: [candidates]
+              properties:
+                candidate_pool_size: { type: integer }
+                applied_filters: { type: object, additionalProperties: true }
+                filters_suppressed:
+                  type: boolean
+                  description: True when classification confidence was too low to filter (FR-010).
+                candidates:
+                  type: array
+                  items: { $ref: '#/components/schemas/RetrievedCandidate' }
+            rerank:
+              type: object
+              additionalProperties: false
+              required: [model, candidates]
+              properties:
+                model: { type: string }
+                candidates:
+                  type: array
+                  items: { $ref: '#/components/schemas/RerankedCandidate' }
+            evidence:
+              type: object
+              additionalProperties: false
+              required: [selected]
+              properties:
+                selected:
+                  type: array
+                  items: { $ref: '#/components/schemas/SelectedEvidence' }
+            citations:
+              type: object
+              additionalProperties: false
+              required: [entries]
+              properties:
+                entries:
+                  type: array
+                  items: { $ref: '#/components/schemas/Citation' }
+
+    RetrievedCandidate:
+      type: object
+      additionalProperties: false
+      required: [unit_id, document_id, similarity_score]
+      properties:
+        unit_id: { type: string, format: uuid }
+        document_id: { type: string, format: uuid }
+        source_url: { type: string, format: uri }
+        title: { type: string }
+        product: { type: [string, 'null'] }
+        category: { type: [string, 'null'] }
+        heading_path: { type: array, items: { type: string } }
+        similarity_score: { type: number }
+
+    RerankedCandidate:
+      type: object
+      additionalProperties: false
+      required: [unit_id, rerank_score, rank]
+      properties:
+        unit_id: { type: string, format: uuid }
+        document_id: { type: string, format: uuid }
+        heading_path: { type: array, items: { type: string } }
+        similarity_score: { type: number, description: Carried through for comparison. Not comparable with rerank_score. }
+        rerank_score: { type: number }
+        rank: { type: integer, minimum: 1 }
+
+    SelectedEvidence:
+      type: object
+      additionalProperties: false
+      required: [unit_id, rank]
+      properties:
+        unit_id: { type: string, format: uuid }
+        document_id: { type: string, format: uuid }
+        rank: { type: integer, minimum: 1 }
+        heading_path: { type: array, items: { type: string } }
+        excerpt: { type: string }
+        selection_scores:
+          type: object
+          additionalProperties: false
+          description: The separate signals FR-021 requires, reported independently and never averaged into one number.
+          properties:
+            semantic_relevance: { type: number }
+            rerank_strength: { type: number }
+            metadata_match: { type: number }
+            heading_relevance: { type: number }
+            diversity_penalty: { type: number }
+        near_duplicate_suppressed: { type: boolean }
+
+    Source:
+      type: object
+      additionalProperties: false
+      required: [id, name, start_url, allowed_domains, enabled, status, page_count, unit_count]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        start_url: { type: string, format: uri }
+        allowed_domains: { type: array, items: { type: string } }
+        product_domain: { type: [string, 'null'] }
+        enabled: { type: boolean }
+        status: { type: string, enum: [active, disabled, error] }
+        page_count: { type: integer, description: Live documents only; deleted documents are excluded. }
+        unit_count: { type: integer }
+        last_crawl_at: { type: [string, 'null'], format: date-time }
+        last_crawl_status: { $ref: '#/components/schemas/CrawlJobStatus' }
+        created_at: { type: string, format: date-time }
+
+    SourceCreate:
+      type: object
+      additionalProperties: false
+      required: [name, start_url]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        start_url: { type: string, format: uri, maxLength: 2000 }
+        product_domain: { type: [string, 'null'] }
+        max_pages:
+          type: integer
+          minimum: 1
+          maximum: 500
+          default: 100
+          description: Bounded crawl (FR-027).
+        max_depth: { type: integer, minimum: 0, maximum: 5, default: 2 }
+        delay_seconds:
+          type: number
+          minimum: 0.1
+          maximum: 60
+          default: 1.0
+          description: Per-request delay between pages (FR-027, FR-028).
+        start_crawl: { type: boolean, default: true }
+
+    SourceUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        enabled: { type: boolean }
+        product_domain: { type: [string, 'null'] }
+        max_pages: { type: integer, minimum: 1, maximum: 500 }
+        max_depth: { type: integer, minimum: 0, maximum: 5 }
+        delay_seconds: { type: number, minimum: 0.1, maximum: 60 }
+
+    DocumentState:
+      type: string
+      enum: [discovered, crawling, processed, indexed, failed, deleted]
+
+    Document:
+      type: object
+      additionalProperties: false
+      required: [id, source_id, url, state, vectors_live, unit_count]
+      properties:
+        id: { type: string, format: uuid }
+        source_id: { type: string, format: uuid }
+        url: { type: string, format: uri }
+        canonical_url: { type: [string, 'null'], format: uri }
+        title: { type: [string, 'null'] }
+        product: { type: [string, 'null'] }
+        category: { type: [string, 'null'] }
+        page_type: { type: [string, 'null'] }
+        language: { type: [string, 'null'] }
+        state: { $ref: '#/components/schemas/DocumentState' }
+        state_detail: { type: [string, 'null'] }
+        vectors_live:
+          type: boolean
+          description: |
+            True when vectors for this document are retrievable. Stays true for a document in
+            `failed` that was previously indexed, because a failed re-crawl leaves prior content
+            live (FR-054). This is why it is not derivable from `state`.
+        unit_count: { type: integer }
+        content_fingerprint: { type: [string, 'null'] }
+        source_modified_at: { type: [string, 'null'], format: date-time }
+        last_crawled_at: { type: [string, 'null'], format: date-time }
+        indexed_at: { type: [string, 'null'], format: date-time }
+        tombstoned_at: { type: [string, 'null'], format: date-time }
+        created_at: { type: string, format: date-time }
+
+    DocumentUnit:
+      type: object
+      additionalProperties: false
+      description: |
+        Provenance only. Unit text is held in the vector store and is deliberately not returned
+        by this endpoint, so a corpus view cannot become a content dump.
+      required: [id, document_id, ordinal, heading_path, token_count, block_types]
+      properties:
+        id: { type: string, format: uuid }
+        document_id: { type: string, format: uuid }
+        ordinal: { type: integer, minimum: 0 }
+        vector_id: { type: string }
+        heading_path: { type: array, items: { type: string } }
+        block_types: { type: array, items: { type: string } }
+        token_count: { type: integer, minimum: 1 }
+        overlap_tokens: { type: integer, minimum: 0 }
+        text_fingerprint: { type: string }
+
+    CrawlJobStatus:
+      type: string
+      enum: [queued, running, completed, completed_with_errors, failed, cancelled]
+
+    CrawlJob:
+      type: object
+      additionalProperties: false
+      required: [id, source_id, target_url, status, requested_at, counters]
+      properties:
+        id: { type: string, format: uuid }
+        source_id: { type: string, format: uuid }
+        target_url: { type: string, format: uri }
+        status: { $ref: '#/components/schemas/CrawlJobStatus' }
+        requested_at: { type: string, format: date-time }
+        started_at: { type: [string, 'null'], format: date-time }
+        finished_at: { type: [string, 'null'], format: date-time }
+        counters:
+          type: object
+          additionalProperties: false
+          required: [discovered, processed, unchanged, skipped, failed]
+          properties:
+            discovered: { type: integer }
+            processed: { type: integer }
+            unchanged: { type: integer, description: Pages whose fingerprint matched; not re-indexed (SC-012). }
+            skipped: { type: integer }
+            failed: { type: integer }
+        skipped_reasons: { type: object, additionalProperties: { type: integer } }
+        error_code: { type: [string, 'null'] }
+        error_message: { type: [string, 'null'] }
+
+    EvaluationDataset:
+      type: object
+      additionalProperties: false
+      required: [dataset_version, questions]
+      properties:
+        dataset_version: { type: string }
+        generated_at: { type: [string, 'null'], format: date-time }
+        questions:
+          type: array
+          minItems: 30
+          items: { $ref: '#/components/schemas/EvaluationQuestion' }
+
+    EvaluationQuestion:
+      type: object
+      additionalProperties: false
+      required: [id, question, category, difficulty, is_unsupported, expected]
+      properties:
+        id: { type: string }
+        question: { type: string }
+        category:
+          type: string
+          enum: [simple_lookup, multi_part, cross_product, troubleshooting, permissions, api, ambiguous, unsupported]
+        difficulty: { type: string, enum: [easy, medium, hard] }
+        is_unsupported: { type: boolean }
+        expected:
+          type: object
+          additionalProperties: false
+          required: [must_refuse, topics]
+          properties:
+            must_refuse: { type: boolean }
+            product: { type: [string, 'null'] }
+            category: { type: [string, 'null'] }
+            heading_path: { type: array, items: { type: string } }
+            topics:
+              type: array
+              minItems: 1
+              items: { type: string }
+              description: Topic coverage expectations. No canonical answer string (FR-040).
+            notes:
+              type: [string, 'null']
+              description: Accepts alternative valid answers so one phrasing is not scored as a failure.
+
+    EvaluationRun:
+      type: object
+      additionalProperties: false
+      required: [id, dataset_version, status, gate_outcome]
+      description: |
+        `metrics` is populated only when the run has finished, and every value in it was
+        computed from that run (FR-036). A run with no results yet carries `metrics: null`
+        rather than zeroes or estimates.
+      properties:
+        id: { type: string, format: uuid }
+        dataset_version: { type: string }
+        dataset_fingerprint: { type: string }
+        status: { type: string, enum: [queued, running, completed, failed] }
+        started_at: { type: [string, 'null'], format: date-time }
+        finished_at: { type: [string, 'null'], format: date-time }
+        question_count: { type: integer }
+        metrics:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            recall_at_5: { type: [number, 'null'] }
+            precision_at_5: { type: [number, 'null'] }
+            mrr: { type: [number, 'null'] }
+            cross_product_domain_coverage: { type: [number, 'null'] }
+            citation_validity: { type: [number, 'null'] }
+            claim_coverage: { type: [number, 'null'] }
+            faithfulness: { type: [number, 'null'] }
+            unsupported_refusal_rate: { type: [number, 'null'] }
+            fabricated_fact_count: { type: [integer, 'null'] }
+            invalid_citation_count: { type: [integer, 'null'] }
+            p50_latency_ms: { type: [integer, 'null'] }
+            p95_latency_ms: { type: [integer, 'null'] }
+            error_rate: { type: [number, 'null'] }
+        thresholds:
+          type: object
+          additionalProperties: { type: number }
+          description: The gate values in force for this run, stored so a result remains interpretable after a threshold change.
+        gate_outcome: { type: string, enum: [pass, fail] }
+        gate_failures:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [gate, target, actual]
+            properties:
+              gate: { type: string }
+              target: { type: number }
+              actual: { type: number }
+
+    EvaluationResult:
+      type: object
+      additionalProperties: false
+      required: [question_id, refused, fabricated_fact_count, invalid_citation_count]
+      properties:
+        question_id: { type: string }
+        question: { type: string }
+        category: { type: string }
+        difficulty: { type: string }
+        recall_at_5: { type: [number, 'null'] }
+        precision_at_5: { type: [number, 'null'] }
+        mrr: { type: [number, 'null'] }
+        citation_validity: { type: [number, 'null'] }
+        claim_coverage: { type: [number, 'null'] }
+        faithfulness: { type: [number, 'null'] }
+        refused: { type: boolean }
+        fabricated_fact_count: { type: integer }
+        invalid_citation_count: { type: integer }
+        latency_ms: { type: [integer, 'null'] }
+        error: { type: [string, 'null'] }
+
+    DependencyStatus:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, enum: [ok, degraded, unavailable] }
+        detail: { type: [string, 'null'] }
+        latency_ms: { type: [integer, 'null'] }
+
+    SecretPresence:
+      type: object
+      additionalProperties: false
+      required: [configured]
+      description: Presence only. There is deliberately no value field (FR-042).
+      properties:
+        configured: { type: boolean }

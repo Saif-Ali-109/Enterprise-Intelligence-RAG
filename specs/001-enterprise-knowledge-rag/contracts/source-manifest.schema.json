@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Saif-Ali-109/Enterprise-Intelligence-RAG/contracts/source-manifest.schema.json",
+  "title": "Source manifest",
+  "description": "Schema for the committed list of documentation entry points to seed the corpus. This file contains source references only. Third-party page content MUST NOT be committed (FR-032, SC-015), and this schema makes that structural rather than a matter of discipline: there is no field in which page content could be recorded, and every object is closed. If content ever needs to be carried, it belongs in the vector store, which is not in version control.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["manifest_version", "sources"],
+  "properties": {
+    "manifest_version": {
+      "type": "string",
+      "description": "Identity of this manifest. Recorded on the crawl job so a corpus can be traced to the manifest that seeded it."
+    },
+    "generated_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "notes": {
+      "type": ["string", "null"],
+      "description": "Editorial notes — why these entry points, what is deliberately excluded, and any path whose crawling permission was checked."
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/source" }
+    }
+  },
+
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "start_url"],
+      "description": "One registered documentation entry point.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Human-readable label shown in the source registry."
+        },
+        "start_url": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 2000,
+          "pattern": "^https?://",
+          "description": "The entry point. Must be a public http or https address; the address guard refuses anything else before a connection is opened (FR-044). A path disallowed by the site's crawling directives is excluded here rather than worked around."
+        },
+        "product_domain": {
+          "type": ["string", "null"],
+          "description": "Product this source documents, e.g. 'jira', 'confluence'. Null for a cross-product entry point, which causes retrieval to span domains (FR-013)."
+        },
+        "allowed_domains": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Hosts the crawl may reach from this entry point. Derived from start_url when omitted, and never permitted to widen beyond the registrant's entry point."
+        },
+        "max_pages": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 100,
+          "description": "Bounded crawl (FR-027). The demonstration corpus targets 50-100 pages overall (SC-011)."
+        },
+        "max_depth": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5,
+          "default": 2,
+          "description": "Traversal depth bound from the entry point (FR-027)."
+        },
+        "delay_seconds": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 60,
+          "default": 1.0,
+          "description": "Per-request delay between pages (FR-027). The crawler identifies itself honestly and respects the site's stated directives regardless of this value (FR-028)."
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "notes": {
+          "type": ["string", "null"],
+          "description": "Why this source was chosen and what it is expected to cover."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,63 @@
+# Spec Kit extension hooks — Enterprise Knowledge Intelligence RAG
+#
+# Schema note: this file is hand-authored. The installed Spec Kit (v1.0.4)
+# ships no extensions.yml template or JSON schema, so the structure below is
+# derived from the hook contract that the command definitions in
+# .opencode/commands/ actually consume:
+#
+#   hooks:
+#     <before|after>_<command>:
+#       - extension:   <name>            # identifier for the extension
+#         command:     /<command>        # command to dispatch
+#         description: <what it does>
+#         prompt:      <prompt shown when optional>
+#         optional:    true | false      # false => MUST run before continuing
+#         enabled:     true | false      # absent => treated as enabled
+#         condition:   <expression>      # left to the executor; not evaluated here
+#
+# If a future Spec Kit release ships an authoritative schema, reconcile this
+# file against it rather than assuming these keys are stable.
+
+extensions:
+  git:
+    description: >-
+      Creates and switches to a feature branch for each Spec Kit command that
+      produces versioned work.
+    status: registered
+    enabled: false
+    disabled_reason: >-
+      This directory is not yet a git repository, so branch creation would fail
+      on every dispatch. Enable after `git init` and after adding the
+      destination remote (https://github.com/Saif-Ali-109/Enterprise-Intelligence-RAG).
+      Note: the repository is named after the intended project, while this
+      working directory is still called Custom-RAG; decide whether to rename
+      before the first push.
+
+hooks:
+  # --- constitution -------------------------------------------------------
+  before_constitution: []
+  after_constitution: []
+
+  # --- specify -----------------------------------------------------------
+  before_specify: []
+  after_specify: []
+
+  # --- clarify -----------------------------------------------------------
+  before_clarify: []
+  after_clarify: []
+
+  # --- plan / tasks / implement ------------------------------------------
+  # Not exercised in this session yet, so intentionally left undeclared.
+  # Add `before_plan` / `after_plan` / `before_tasks` / `after_tasks` /
+  # `before_implement` / `after_implement` here using the same entry shape
+  # shown above once those commands are run and their hook keys are confirmed.
+
+# Example of a populated hook, kept commented so it stays inert:
+#
+# hooks:
+#   before_specify:
+#     - extension: git
+#       command: /speckit.specify
+#       description: Create and switch to a feature branch for the new spec.
+#       optional: false
+#       enabled: true

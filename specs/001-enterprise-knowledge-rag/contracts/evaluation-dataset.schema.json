@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Saif-Ali-109/Enterprise-Intelligence-RAG/contracts/evaluation-dataset.schema.json",
+  "title": "Evaluation dataset",
+  "description": "Schema for the curated assessment question set (FR-039). The file is committed to version control; this schema makes it machine-validated and structurally prevents the exact-URL pinning that FR-063 forbids. There is deliberately no URL field anywhere, and every object is closed, so a pinned source cannot be introduced through a new property either. Grading is by topic coverage (FR-064).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["dataset_version", "questions"],
+  "properties": {
+    "dataset_version": {
+      "type": "string",
+      "description": "Identity of this dataset. An evaluation run records the version and a content fingerprint, so two runs are never silently compared across different datasets."
+    },
+    "generated_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "Editorial timestamp. Not a run timestamp; runs carry their own."
+    },
+    "notes": {
+      "type": ["string", "null"],
+      "description": "Editorial notes about the set as a whole — coverage, known gaps, deliberate exclusions."
+    },
+    "questions": {
+      "type": "array",
+      "minItems": 30,
+      "description": "FR-039 requires at least 30 questions spanning eight categories and three difficulties.",
+      "items": { "$ref": "#/$defs/question" }
+    }
+  },
+
+  "$defs": {
+    "question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "question", "category", "difficulty", "is_unsupported", "expected"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "description": "Stable identifier, referenced by per-question evaluation results. Changing it orphans historical results."
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "description": "The question text, within the same bound the API enforces (FR-043)."
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "simple_lookup",
+            "multi_part",
+            "cross_product",
+            "troubleshooting",
+            "permissions",
+            "api",
+            "ambiguous",
+            "unsupported"
+          ],
+          "description": "FR-039 requires coverage of all eight. 'unsupported' questions are the deliberately-unanswerable set behind SC-008."
+        },
+        "difficulty": {
+          "type": "string",
+          "enum": ["easy", "medium", "hard"]
+        },
+        "is_unsupported": {
+          "type": "boolean",
+          "description": "True for questions the corpus genuinely does not cover. These must be refused with zero fabricated facts and zero fabricated citations (SC-008). Retrieval metrics are null for them — not applicable, not zero."
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional editorial labels for slicing a run's results."
+        },
+        "expected": { "$ref": "#/$defs/expectation" }
+      },
+      "allOf": [
+        {
+          "description": "The 'unsupported' category and the is_unsupported flag must agree, so a deliberately-unanswerable question cannot be silently filed as a normal one.",
+          "if": { "properties": { "category": { "const": "unsupported" } }, "required": ["category"] },
+          "then": { "properties": { "is_unsupported": { "const": true } } }
+        },
+        {
+          "if": { "properties": { "is_unsupported": { "const": true } }, "required": ["is_unsupported"] },
+          "then": { "properties": { "expected": { "properties": { "must_refuse": { "const": true } }, "required": ["must_refuse"] } } }
+        }
+      ]
+    },
+
+    "expectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["must_refuse", "topics"],
+      "description": "What a correct response must cover, expressed as topics rather than a canonical answer string (FR-040). Multiple valid answers are accepted; notes may record alternative valid phrasings so a correct answer in unexpected words is not scored as a failure.",
+      "properties": {
+        "must_refuse": {
+          "type": "boolean",
+          "description": "True when a refusal is the only acceptable outcome. For supported questions this is false, and an unwarranted refusal counts against the run."
+        },
+        "product": {
+          "type": ["string", "null"],
+          "description": "Expected product domain, as a topic expectation. Null when the question genuinely spans products or no single product applies."
+        },
+        "category": {
+          "type": ["string", "null"],
+          "description": "Expected documentation category, as a topic expectation."
+        },
+        "heading_path": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Expected heading path or paths. Topic-graded, not pinned to a URL, so a publisher reorganising their documentation does not produce a false regression (FR-063, FR-064). May be empty when heading-level grading is not meaningful for the question."
+        },
+        "topics": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" },
+          "description": "Substantive points a correct answer must cover. Claim coverage is scored against these (SC-006), so each entry should be one checkable assertion rather than a topic label."
+        },
+        "notes": {
+          "type": ["string", "null"],
+          "description": "Guidance for a human grader and for model-based scoring. Record alternative valid answers here rather than widening 'topics', so coverage stays measurable."
+        },
+        "acceptable_alternatives": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Alternative correct answers or phrasings. Present so a valid answer in unexpected words is not scored as a failure (FR-040)."
+        }
+      }
+    }
+  }
+}

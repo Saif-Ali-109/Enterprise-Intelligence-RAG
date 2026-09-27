@@ -1,0 +1,76 @@
+# ---------------------------------------------------------------------------
+# Secrets — never committed (FR-042, SC-015)
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+service-account*.json
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.log
+
+# ---------------------------------------------------------------------------
+# Node / Next.js
+# ---------------------------------------------------------------------------
+node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+next-env.d.ts
+
+# ---------------------------------------------------------------------------
+# Local data — the corpus is fetched at run time, never committed (FR-032)
+# ---------------------------------------------------------------------------
+# Committed on purpose: data/source_manifest.json and
+# evaluation/golden_questions.json (source references and questions only).
+# Anything that looks like publisher page content must never land here.
+*.html
+*.htm
+!docs/**/*.html
+crawl-cache/
+.raw/
+pages/
+extracted/
+
+# ---------------------------------------------------------------------------
+# Local infrastructure
+# ---------------------------------------------------------------------------
+docker-compose.override.yml
+.pgdata/
+*.sqlite
+*.sqlite3
+pgdata/
+
+# ---------------------------------------------------------------------------
+# Tooling / editor
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
