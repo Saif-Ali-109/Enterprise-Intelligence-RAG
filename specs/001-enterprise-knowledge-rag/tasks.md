@@ -62,7 +62,7 @@ data files, and the repository-hygiene tooling.
 - [ ] T012 Write `frontend/Dockerfile` — Node 20.9+ (R-011), multi-stage build, no secrets in any layer
 - [ ] T013 Write `.env.example` containing every variable in quickstart.md §2 with empty or placeholder values, including `GROQ_API_KEY`, `PINECONE_API_KEY`, and the `EVAL_GATE_*` thresholds — and **no** threshold variable for the two absolute-zero gates (FR-065, FR-066)
 - [ ] T014 [P] Write `scripts/validate_datasets.py` — validate `data/source_manifest.json` against `specs/001-enterprise-knowledge-rag/contracts/source-manifest.schema.json` and `evaluation/golden_questions.json` against `contracts/evaluation-dataset.schema.json`; exit non-zero with a specific message on failure (FR-032, FR-063, FR-064)
-- [ ] T015 [P] Write `scripts/check_repo_hygiene.sh` — fail if any `.env` is tracked, if any file matches the third-party-content patterns in `.gitignore`, or if a provider key pattern appears anywhere in tracked content (SC-015)
+- [ ] T015 [P] Write `scripts/check_repo_hygiene.sh` — fail if any `.env` is tracked, if any file matches the third-party-content patterns in `.gitignore`, if a provider key pattern appears anywhere in tracked content, or if any tracked file contains a machine-specific absolute path such as `/home/<user>/`, `/Users/<name>/`, `Desktop/`, `C:\`, or `/mnt/` (SC-015, and the path rule under Version Control Discipline)
 - [ ] T016 Write `data/source_manifest.json` — source URLs only, with no pre-collected copy of the documentation anywhere in the repository, validated by T014. Exclude any path disallowed by `/robots.txt` (T018) (FR-023, FR-032)
 - [ ] T017 Write `evaluation/golden_questions.json` — at least 30 questions spanning simple lookup, multi-part, cross-product, troubleshooting, permissions, programming-interface, ambiguous, and deliberately-unsupported categories, with easy/medium/hard difficulty. Each records expected product, category, and heading path as **topic expectations**. Must contain **no** URL on any question object (FR-039, FR-040, FR-063, FR-064)
 - [ ] T018 Verify every URL in `data/source_manifest.json` resolves over HTTP and read the publisher's `/robots.txt`; record which paths are crawl-permitted in a comment in `data/source_manifest.json`. This resolves the spec Assumption that registered paths permit crawling (FR-028)
@@ -374,7 +374,13 @@ end-to-end validation across all stories.
 - [ ] T175 Perform a security review of `backend/app/core/errors.py`, `backend/app/core/security.py`, `backend/app/core/sanitize.py`, and `backend/app/core/logging.py`, confirming no stack trace, internal path, or secret reaches any response or log, and record the result in `docs/DATA_SOURCE_POLICY.md` (FR-044, FR-046, FR-047)
 - [ ] T176 Confirm `make up` works from a clean clone of `README.md`'s published instructions, timed against the 15-minute reproduction budget (FR-052, SC-020)
 - [ ] T177 Record the real measured evaluation results in `docs/EVALUATION.md` from an actual run, including any gate that failed, reported as failed (FR-036, FR-041, Principle VI)
-- [ ] T178 Commit and push the completed implementation to `https://github.com/Saif-Ali-109/Enterprise-Intelligence-RAG`
+- [ ] T178 Merge the final `001-enterprise-knowledge-rag/phase-10-polish` branch into `main` and push — the last merge of the build, not its only commit; every phase checkpoint before it was already committed and merged (see Version Control Discipline)
+
+**Checkpoint**: The build is published, reviewable, and honest about itself. Every success
+criterion has either passed against a real run or is recorded as failing, the accessibility
+claims were produced by actually running the checks rather than by asserting them, and a
+reviewer can reach a working demonstration from the published instructions alone. This is
+the checkpoint T178 merges on.
 
 ---
 
@@ -445,6 +451,73 @@ understood before the extractor is written, because the implementation it constr
 
 ---
 
+## Version Control Discipline
+
+### Branches
+
+One branch per phase, named `001-enterprise-knowledge-rag/phase-NN-slug`:
+
+```
+main                                                     # spec baseline + each merged phase
+├── 001-enterprise-knowledge-rag/phase-01-setup
+├── 001-enterprise-knowledge-rag/phase-02-foundational
+├── 001-enterprise-knowledge-rag/phase-03-us3-ingestion     # MVP together with phase 04
+├── 001-enterprise-knowledge-rag/phase-04-us1-cited-answers # MVP
+├── 001-enterprise-knowledge-rag/phase-05-us2-refusal
+├── 001-enterprise-knowledge-rag/phase-06-us4-cross-product
+├── 001-enterprise-knowledge-rag/phase-07-us5-explainability
+├── 001-enterprise-knowledge-rag/phase-08-us6-evaluation
+├── 001-enterprise-knowledge-rag/phase-09-us7-corpus-console
+└── 001-enterprise-knowledge-rag/phase-10-polish
+```
+
+Each branch is cut from `main` at the start of its phase and merged back at that phase's
+checkpoint. `main` therefore always holds a coherent, working state rather than half of a
+build, and a reviewer reading the history sees one phase per merge.
+
+`001-enterprise-knowledge-rag` is also the feature identifier in
+`.specify/feature.json` and in the `BRANCH` field that
+`.specify/scripts/bash/check-prerequisites.sh` reports. It is not by itself a git branch —
+the phase branches above are.
+
+### Commits
+
+- **Commit at every phase checkpoint**, not at every task. Per-task commits bury the
+  meaningful ones; the checkpoints already exist at the end of each phase.
+- **T027 and T028 are committed separately and before T029, T030, and T031.** They resolve
+  vendor API ambiguity against the installed SDK — whether `create_for_model` or
+  `IntegratedSpec` is current, and whether reasoning suppression actually works. A reviewer
+  should be able to read the finding without wading through the adapter code that depends
+  on it.
+- **Never mix a spec change with a code change in one commit.** If a task reveals that the
+  specification is wrong, fix the spec, commit that on its own, then implement against the
+  corrected spec. A commit that changes what the system must do and how it does it at the
+  same time is not reviewable.
+- **Never force-push to `main`.** It is the spec baseline plus every merged phase.
+- A commit message states what changed and, where relevant, which requirements it
+  satisfies. The four existing commits set the standard: what happened, and the consequence
+  if it is not read.
+
+### Paths in code and specs
+
+- Every path written into a file — code, test, configuration, Dockerfile, documentation —
+  is **repo-relative and starts at the repository root**, for example
+  `backend/app/retrieval/vector_store.py` or
+  `specs/001-enterprise-knowledge-rag/quickstart.md`.
+- **Never** write a home directory, a desktop path, an OS-specific separator, or anything
+  else that resolves differently on another machine. No `/home/<user>/…`, no `Desktop/`, no
+  `C:\…`, no `/Users/<name>/…`.
+- A path that depends on where the repository happens to be cloned is a defect, not a
+  convenience. It breaks the clone, and it will be written by habit rather than by need.
+- Paths that are genuinely external — a publisher's documentation URL, a site's
+  `/robots.txt`, a vendor API endpoint — are URLs or external absolute paths by nature, and
+  are written as such deliberately rather than by accident.
+- Shell commands in the quickstart assume the repository root as the working directory.
+- `scripts/check_repo_hygiene.sh` fails the build on a machine-specific path in any tracked
+  file, so this rule is enforced on every change rather than merely stated here.
+
+---
+
 ## Implementation Strategy
 
 ### MVP — User Stories 3 and 1 together
@@ -496,6 +569,11 @@ are **not** parallelisable even with a large team. The genuine parallelism is:
 - `[P]` means different files with no dependency on an unfinished task
 - `[Story]` maps each task to its user story for traceability to spec.md
 - Every task names a concrete file; none requires interpretation beyond its description
+- **Every path is repo-relative from the repository root. Never a home directory, a desktop
+  path, or an OS-specific separator** — see Paths in code and specs
+- **Commit at each phase checkpoint, one branch per phase.** T027 and T028 are additionally
+  committed on their own before the adapters that depend on them. A spec change and a code
+  change never share a commit — see Version Control Discipline
 - Tests are confirmed failing before implementation, per the TDD ordering in each story phase
 - T027 and T028 are **gating tasks**: their findings change the code written in T029, T030,
   and T031. Do not skip them or proceed on a guess
