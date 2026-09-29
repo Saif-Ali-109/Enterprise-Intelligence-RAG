@@ -1,0 +1,21 @@
+# Development and test dependencies. Installed on top of requirements.txt.
+-r requirements.txt
+
+pytest==9.0.1
+pytest-asyncio==1.4.0
+pytest-cov==7.0.0
+
+# Dataset and contract validation. validate_datasets.py refuses to run without it,
+# and the contract suite validates responses against contracts/openapi.yaml.
+jsonschema==4.26.0
+PyYAML==6.0.3
+openapi-spec-validator==0.9.0
+
+# Reference tokenizer for the T042 / T054 calibration test. This is a TEST-ONLY
+# dependency: it is never imported by application code, and R-013 records it as
+# the yardstick the local estimator is measured against, not as its implementation.
+tokenizers==0.23.2
+transformers==5.17.0
+
+ruff==0.16.9
+mypy==2.3.1

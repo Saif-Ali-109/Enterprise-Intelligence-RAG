@@ -1,0 +1,93 @@
+[project]
+name = "enterprise-knowledge-rag-backend"
+version = "1.0.0"
+description = "Evidence-grounded question answering over publicly accessible documentation."
+requires-python = ">=3.12"
+
+# Dependencies are pinned in requirements.txt, deliberately not here, so that
+# there is exactly one file an operator has to read to see what is installed.
+dependencies = []
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # bugbear
+    "A",   # builtin shadowing
+    "C4",  # comprehensions
+    "DTZ", # naive datetimes
+    "T20", # stray print
+]
+ignore = [
+    "E501",  # line length is ruff's job, not a hard error
+    "B008",  # FastAPI's Depends() in defaults is the framework idiom
+    # The error classes are named for the *condition* they report, not for
+    # their Python base class: `SsrfBlocked`, `RobotsDisallowed`,
+    # `DocumentDeleted`. Appending `Error` to all twelve would make the
+    # catalogue read as `SsrfBlockedError` while two classes that already
+    # carry the suffix (`ProviderError`, `InternalError`) would then be the
+    # inconsistent ones. The names are the domain vocabulary, and the
+    # `ErrorCode` enum beside them is the wire contract, so the naming
+    # convention is enforced there instead.
+    "N818",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert on things production code forbids, and print is how a failing
+# assertion reports what it saw.
+"tests/**" = ["T20", "N802"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+show_error_codes = true
+plugins = ["pydantic.mypy"]
+mypy_path = "app"
+exclude = "(^|/)(alembic|migrations)/"
+
+[[tool.mypy.overrides]]
+# ---------------------------------------------------------------------------
+# The three vendor adapter modules, excluded from strict mode on purpose.
+# ---------------------------------------------------------------------------
+# These are the only files permitted to import a vendor SDK (Constitution VIII).
+# They pass through vendor types at the boundary and vendor SDKs are not typed
+# strictly, so holding them to `strict` would mean either asserting vendor
+# types away — losing the very traceability the adapters exist to provide — or
+# scattering `Any` casts across the pipeline.
+#
+# This is not a blanket exemption. Each module below is narrow, independently
+# tested, and the interfaces it implements are fully typed. What is relaxed is
+# checking of the vendor call itself; what stays strict is everything on our
+# side of the boundary. T029-T031 test the behaviour, not the annotations.
+module = [
+    "app.retrieval.vector_store",
+    "app.generation.provider",
+    "app.retrieval.reranker",
+]
+disallow_untyped_defs = false
+disallow_any_generics = false
+disallow_untyped_decorators = false
+warn_return_any = false
+warn_unused_ignores = false
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+omit = ["app/db/migrations/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+]

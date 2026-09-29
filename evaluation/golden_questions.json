@@ -1,0 +1,647 @@
+{
+  "dataset_version": "1.0.0",
+  "generated_at": "2026-09-29T00:00:00Z",
+  "notes": "Thirty-two questions across all eight required categories and all three difficulties. Every expectation is expressed as TOPIC COVERAGE, never as a canonical answer string and never as a URL (FR-040, FR-063, FR-064). That is a deliberate consequence of the corpus being ingested by URL from documentation the publisher reorganises whenever they like: a dataset pinned to today's page structure would report a false regression the first time Atlassian renames a heading, and would report it as a retrieval regression when nothing about retrieval changed. contracts/evaluation-dataset.schema.json has additionalProperties: false and no URL field anywhere, so a pinned source cannot be introduced through a new property either. --- The 'unsupported' bucket is the deliberately-unanswerable set behind SC-008. Four questions are in it, all plausible-looking questions about things this corpus genuinely does not document, which is harder than asking about something obviously absurd. They must be refused with zero fabricated facts and zero fabricated citations. Retrieval metrics are null for them — not applicable to the question, not zero, and not a failure. --- 'topics' entries are each one checkable assertion rather than a topic label, so claim coverage (SC-006) is measurable. Where several phrasings are equally correct, they are listed in acceptable_alternatives rather than by widening 'topics', because widening topics makes coverage unfalsifiable. --- Independent technical demonstration. Not affiliated with, sponsored by, or endorsed by Atlassian. Questions are written from a user's point of view, not from any internal knowledge of the system.",
+  "questions": [
+    {
+      "id": "simple-jira-filter-saved",
+      "question": "How do I save a filter in Jira Cloud so I can run it again later?",
+      "category": "simple_lookup",
+      "difficulty": "easy",
+      "is_unsupported": false,
+      "tags": ["jira", "filters", "views"],
+      "expected": {
+        "must_refuse": false,
+        "product": "jira",
+        "category": "filters",
+        "heading_path": ["Filter and search", "Saving a filter"],
+        "topics": [
+          "a filter can be saved for reuse",
+          "saving is available from the filter or search interface",
+          "a saved filter is then runnable again by name"
+        ],
+        "notes": "Wording varies: some pages say 'save your filter', others 'save as a filter'. Do not require the word 'save' to appear in a specific form.",
+        "acceptable_alternatives": [
+          "name the filter and choose save",
+          "saved filters are accessible from the issue navigator or filter view"
+        ]
+      }
+    },
+    {
+      "id": "simple-jira-issue-types",
+      "question": "Which issue types are available by default in a Jira Cloud project?",
+      "category": "simple_lookup",
+      "difficulty": "easy",
+      "is_unsupported": false,
+      "tags": ["jira", "issue-types"],
+      "expected": {
+        "must_refuse": false,
+        "product": "jira",
+        "category": "issue-types",
+        "heading_path": ["What are issues and projects", "Issue types"],
+        "topics": [
+          "the default issue types are named",
+          "subtasks are one of the defaults",
+          "additional issue types can be added by an administrator"
+        ],
+        "notes": "The exact default set has changed over time and may differ by template. The topic expectation is that the answer names the default types and mentions configurability, not that it matches any particular historical list."
+      }
+    },
+    {
+      "id": "simple-confluence-space-create",
+      "question": "How do I create a new space in Confluence Cloud?",
+      "category": "simple_lookup",
+      "difficulty": "easy",
+      "is_unsupported": false,
+      "tags": ["confluence", "spaces"],
+      "expected": {
+        "must_refuse": false,
+        "product": "confluence",
+        "category": "spaces",
+        "heading_path": ["Create and organize work in Confluence Cloud", "Create a space"],
+        "topics": [
+          "a space is created from the Confluence home or space overview",
+          "the space name is provided when creating it",
+          "the space's key and permissions are set as part of creation"
+        ],
+        "notes": "Confluence has used 'space key' and 'space name' consistently; do not require both to be distinguished if the documentation does not."
+      }
+    },
+    {
+      "id": "simple-jsm-request-vs-issue",
+      "question": "What is the difference between a request and an issue in Jira Service Management?",
+      "category": "simple_lookup",
+      "difficulty": "easy",
+      "is_unsupported": false,
+      "tags": ["jsm", "object-model"],
+      "expected": {
+        "must_refuse": false,
+        "product": "jsm",
+        "category": "issues-and-requests",
+        "heading_path": ["What are issues and requests"],
+        "topics": [
+          "a customer request represents what a customer asks for",
+          "a Jira issue is the internal work item that tracks it",
+          "a request links to the issue or issues that fulfil it"
+        ],
+        "notes": "This is the single most important concept in JSM. An answer that conflates the two, or that explains only one of them, is incomplete."
+      }
+    },
+    {
+      "id": "simple-jira-board-default",
+      "question": "What does a new Jira Cloud board show by default?",
+      "category": "simple_lookup",
+      "difficulty": "easy",
+      "is_unsupported": false,
+      "tags": ["jira", "boards", "agile"],
+      "expected": {
+        "must_refuse": false,
+        "product": "jira",
+        "category": "boards",
+        "heading_path": ["Boards", "Board configuration"],
+        "topics": [
+          "a board is backed by a filter or saved search",
+          "the columns on the board are defined by that filter",
+          "a newly created board starts from a default configuration that can be changed"
+        ],
+        "notes": "The team-managed versus company-managed board distinction exists in the documentation. The topic expectation is that the answer explains what determines board contents, not that it picks a board type."
+      }
+    },
+    {
+      "id": "simple-confluence-page-restrict",
+      "question": "How do I restrict who can view or edit a page in Confluence Cloud?",
+      "category": "permissions",
+      "difficulty": "easy",
+      "is_unsupported": false,
+      "tags": ["confluence", "permissions"],
+      "expected": {
+        "must_refuse": false,
+        "product": "confluence",
+        "category": "page-permissions",
+        "heading_path": ["Page restrictions", "Restrict permissions for a page"],
+        "topics": [
+          "page-level restrictions can be applied to a specific page",
+          "view and edit restrictions are configured separately",
+          "space-level permissions still apply and are not overridden by page restrictions"
+        ],
+        "notes": "The interaction between page restrictions and inherited space permissions is the substantive part. An answer that only lists the settings, without saying they are additional to space permissions, is thin but not wrong."
+      }
+    },
+    {
+      "id": "perms-jira-project-role",
+      "question": "How do I give a user permission to administer a Jira Cloud project?",
+      "category": "permissions",
+      "difficulty": "medium",
+      "is_unsupported": false,
+      "tags": ["jira", "permissions", "administration"],
+      "expected": {
+        "must_refuse": false,
+        "product": "jira",
+        "category": "permissions",
+        "heading_path": ["Administer Jira Cloud", "User management", "Assign project roles"],
+        "topics": [
+          "the user is given a project role that carries the administer permission",
+          "project roles are configured at the scheme level and assigned per user or group",
+          "an administrator permission can also come from a group membership"
+        ],
+        "notes": "Distinguish project roles from permission schemes and from the site-admin role. An answer that conflates them is wrong; an answer that reaches the right place via a different documented route is correct."
+      }
+    },
+    {
+      "id": "perms-jsm-agent-permission",
+      "question": "How do I make a JSM agent able to see and handle all customer requests instead of only their own?",
+      "category": "permissions",
+      "difficulty": "hard",
+      "is_unsupported": false,
+      "tags": ["jsm", "permissions", "agents"],
+      "expected": {
+        "must_refuse": false,
+        "product": "jsm",
+        "category": "permissions",
+        "heading_path": ["Agent and customer experience", "Agent permissions"],
+        "topics": [
+          "agent scope is set to a team or the whole service project",
+          "the agent's team membership determines which requests they can see",
+          "the change is made in service project settings or the agent's team configuration"
+        ],
+        "notes": "JSM's model is team-scoped rather than a simple per-user toggle, so an answer that says 'grant the agent all-requests permission' without mentioning teams is likely drawing on Jira rather than JSM and should be treated as partially incorrect."
+      }
+    },
+    {
+      "id": "perms-confluence-view-restriction",
+      "question": "What is the difference between a Confluence page restriction and a space permission?",
+      "category": "permissions",
+      "difficulty": "medium",
+      "is_unsupported": false,
+      "tags": ["confluence", "permissions", "security"],
+      "expected": {
+        "must_refuse": false,
+        "product": "confluence",
+        "category": "page-permissions",
+        "heading_path": ["Page restrictions"],
+        "topics": [
+          "space permissions are inherited by every page in the space",
+          "page restrictions add or remove access for one page specifically",
+          "a restriction can only reduce access granted by the space, not grant more"
+        ],
+        "notes": "The 'cannot grant more than the space allows' direction is the part most answers get wrong, and it is what makes the concept safe. Grade it as a required topic."
+      }
+    },
+    {
+      "id": "api-jira-create-issue-rest",
+      "question": "How do I create an issue with the Jira Cloud REST API?",
+      "category": "api",
+      "difficulty": "medium",
+      "is_unsupported": false,
+      "tags": ["developer", "jira", "rest-api", "issues"],
+      "expected": {
+        "must_refuse": false,
+        "product": "developer",
+        "category": "issue-api",
+        "heading_path": ["REST API", "Issue", "Create issue"],
+        "topics": [
+          "the create-issue endpoint accepts a JSON request body",
+          "fields including the project and issue type are supplied in the body",
+          "basic authentication or an OAuth token is required"
+        ],
+        "notes": "Accept either the current path naming or the endpoint's described operation. The substantive topics are the JSON body, the required fields, and the auth requirement."
+      }
+    },
+    {
+      "id": "api-jira-jql-search",
+      "question": "How do I search for issues using JQL through the Jira Cloud REST API?",
+      "category": "api",
+      "difficulty": "medium",
+      "is_unsupported": false,
+      "tags": ["developer", "jira", "rest-api", "jql"],
+      "expected": {
+        "must_refuse": false,
+        "product": "developer",
+        "category": "search-api",
+        "heading_path": ["REST API", "Issue search", "Search for issues using JQL"],
+        "topics": [
+          "the JQL string is passed as a query parameter",
+          "the response is paginated and the result set is returned as issues",
+          "results can be limited by a maximum-results parameter"
+        ],
+        "notes": "The pagination behaviour matters: an answer that implies every match is returned in one call is wrong. Treat the pagination topic as required."
+      }
+    },
+    {
+      "id": "api-jira-ratelimit",
+      "question": "What are the rate limits on the Jira Cloud REST API and how should a client handle them?",
+      "category": "api",
+      "difficulty": "hard",
+      "is_unsupported": false,
+      "tags": ["developer", "jira", "rest-api", "rate-limiting"],
+      "expected": {
+        "must_refuse": false,
+        "product": "developer",
+        "category": "rate-limiting",
+        "heading_path": ["REST API", "Rate limiting"],
+        "topics": [
+          "rate limits apply per method and per Atlassian account",
+          "exceeding the limit returns a 429 response",
+          "a client should back off and retry after a delay rather than retry immediately"
+        ],
+        "notes": "The specific numbers are version-specific and change, so do not grade on a numeric figure. Grade the per-method-and-account scoping, the 429, and the back-off behaviour."
+      }
+    },
+    {
+      "id": "api-jsm-request-create",
+      "question": "How do I create a customer request with the Jira Service Management Cloud REST API?",
+      "category": "api",
+      "difficulty": "hard",
+      "is_unsupported": false,
+      "tags": ["developer", "jsm", "rest-api"],
+      "expected": {
+        "must_refuse": false,
+        "product": "developer",
+        "category": "service-desk-api",
+        "heading_path": ["REST API", "Customer request", "Create customer request"],
+        "topics": [
+          "the request-creation endpoint takes a service desk and a request type",
+          "the request body carries the customer and the raised date",
+          "the endpoint is under the service desk path rather than the Jira issue path"
+        ],
+        "notes": "This is the test that the system distinguishes the two developer-platform corpora. An answer describing the generic Jira create-issue endpoint is the wrong API and should not pass."
+      }
+    },
+    {
+      "id": "api-jira-oauth-scopes",
+      "question": "How do I choose the right OAuth scope when building a Jira Cloud app?",
+      "category": "api",
+      "difficulty": "hard",
+      "is_unsupported": false,
+      "tags": ["developer", "jira", "oauth", "scopes"],
+      "expected": {
+        "must_refuse": false,
+        "product": "developer",
+        "category": "oauth",
+        "heading_path": ["OAuth 2.0 (3LO)", "Scopes for OAuth 2.0 apps"],
+        "topics": [
+          "scopes are granular permissions the app requests",
+          "a read scope and a corresponding write scope exist for most resources",
+          "an app should request only the scopes it actually needs"
+        ],
+        "notes": "Do not require a specific scope URI to be named. The topic expectation is the least-privilege principle and the read/write pairing."
+      }
+    },
+    {
+      "id": "trouble-jira-filter-empty",
+      "question": "My saved Jira filter returns no results even though issues match it. What should I check?",
+      "category": "troubleshooting",
+      "difficulty": "medium",
+      "is_unsupported": false,
+      "tags": ["jira", "filters", "troubleshooting"],
+      "expected": {
+        "must_refuse": false,
+        "product": "jira",
+        "category": "filters",
+        "heading_path": ["Filter and search", "Troubleshooting"],
+        "topics": [
+          "the filter's permissions may exclude the user from the issues they can see",
+          "a shared-versus-private filter setting affects who can run it",
+          "the filter may be scoped to a project the user does not have access to"
+        ],
+        "notes": "The permission explanation is the substantive one. An answer that only says 'check your JQL' is unhelpful and misses the point of the question."
+      }
+    },
+    {
+      "id": "trouble-confluence-page-missing",
+      "question": "A Confluence page that used to be visible is gone for some users. What are the likely causes?",
+      "category": "troubleshooting",
+      "difficulty": "medium",
+      "is_unsupported": false,
+      "tags": ["confluence", "troubleshooting", "permissions"],
+      "expected": {
+        "must_refuse": false,
+        "product": "confluence",
+        "category": "troubleshooting",
+        "heading_path": ["Troubleshoot access to content"],
+        "topics": [
+          "a page restriction was added that excludes some users",
+          "a space permission change removed access for a group",
+          "the page was archived or moved, and the old link no longer resolves"
+        ],
+        "notes": "Multiple causes may be correct. FR-040: an answer naming one valid cause well is not a failure for naming only one. Grade on whether the causes given are real documented causes."
+      }
+    },
+    {
+      "id": "trouble-jira-notifications-stopped",
+      "question": "Jira Cloud email notifications stopped arriving. How do I work out why?",
+      "category": "troubleshooting",
+      "difficulty": "medium",
+      "is_unsupported": false,
+      "tags": ["jira", "notifications", "troubleshooting"],
+      "expected": {
+        "must_refuse": false,
+        "product": "jira",
+        "category": "notifications",
+        "heading_path": ["Notifications", "Troubleshoot email notifications"],
+        "topics": [
+          "per-user notification preferences can suppress a scheme's notifications",
+          "the notification scheme assigned to the project determines what is sent",
+          "event notifications must be enabled for the specific event as well as the recipient"
+        ],
+        "notes": "The two-level model — scheme plus user preference — is the substance. An answer naming only one level is partially correct."
+      }
+    },
+    {
+      "id": "trouble-jsm-request-not-created",
+      "question": "A customer submitted a request form in JSM but no request appeared in the queue. What should I check?",
+      "category": "troubleshooting",
+      "difficulty": "hard",
+      "is_unsupported": false,
+      "tags": ["jsm", "troubleshooting", "request-forms"],
+      "expected": {
+        "must_refuse": false,
+        "product": "jsm",
+        "category": "request-management",
+        "heading_path": ["Manage customer requests", "Troubleshoot request creation"],
+        "topics": [
+          "the request type must be active and have a linked issue type",
+          "the customer's account may lack permission to submit to that request queue",
+          "email or portal-side validation can reject the submission before a request is created"
+        ],
+        "notes": "This question spans several JSM pages by design, which is what makes it a genuine multi-hop retrieval test. An answer covering two of the three causes is acceptable and should not be scored as a failure."
+      }
+    },
+    {
+      "id": "multipart-jira-new-project",
+      "question": "I need to set up a new Jira Cloud project with a specific set of issue types, a saved filter, and a board. What are the steps?",
+      "category": "multi_part",
+      "difficulty": "hard",
+      "is_unsupported": false,
+      "tags": ["jira", "multi-part", "projects"],
+      "expected": {
+        "must_refuse": false,
+        "product": "jira",
+        "category": "projects",
+        "heading_path": ["Create a project", "Add a board", "Filter and search"],
+        "topics": [
+          "the project is created and its issue types configured",
+          "a filter is defined and saved for the project's issues",
+          "a board is created from that saved filter"
+        ],
+        "notes": "Three distinct asks in one question. This is the multi-query-rewriting test (FR-013): a single undifferentiated search is the failure mode. An answer that addresses all three parts, even briefly, is correct."
+      }
+    },
+    {
+      "id": "multipart-confluence-structure",
+      "question": "How do I set up a Confluence space so a team can write technical documentation in it, and control who sees it?",
+      "category": "multi_part",
+      "difficulty": "medium",
+      "is_unsupported": false,
+      "tags": ["confluence", "multi-part", "spaces"],
+      "expected": {
+        "must_refuse": false,
+        "product": "confluence",
+        "category": "spaces",
+        "heading_path": ["Create a space", "Space permissions", "Technical documentation"],
+        "topics": [
+          "a space is created for the team's documentation",
+          "space permissions are configured to control who can view and edit",
+          "a page tree or template structure is established for the content"
+        ],
+        "notes": "Two products of work: structure and access. Both must be addressed."
+      }
+    },
+    {
+      "id": "multipart-jsm-lifecycle",
+      "question": "How do I configure a JSM request type so that requests are created, assigned to a team, and reported on?",
+      "category": "multi_part",
+      "difficulty": "hard",
+      "is_unsupported": false,
+      "tags": ["jsm", "multi-part", "workflows"],
+      "expected": {
+        "must_refuse": false,
+        "product": "jsm",
+        "category": "request-management",
+        "heading_path": ["What are project templates", "Manage request types", "Reports"],
+        "topics": [
+          "a request type is created and linked to an issue type",
+          "a workflow routes the resulting issue through the team's states",
+          "JQL or a gadget provides reporting over the created requests"
+        ],
+        "notes": "Three separate JSM concepts. An answer that only explains request-type creation has addressed one third of the question."
+      }
+    },
+    {
+      "id": "multipart-jira-automation",
+      "question": "How do I set up a Jira Cloud automation rule that runs when a status changes?",
+      "category": "multi_part",
+      "difficulty": "medium",
+      "is_unsupported": false,
+      "tags": ["jira", "automation", "workflows"],
+      "expected": {
+        "must_refuse": false,
+        "product": "jira",
+        "category": "automation",
+        "heading_path": ["Automation", "Create a rule", "Trigger"],
+        "topics": [
+          "a trigger is chosen that fires on a status change",
+          "conditions can narrow which issues the rule applies to",
+          "an action is selected to perform when the rule matches"
+        ],
+        "notes": "Trigger, condition, action is the documented structure. All three are required topics; missing the action is a substantive gap."
+      }
+    },
+    {
+      "id": "cross-jira-confluence-link",
+      "question": "How do I link a Jira issue to a Confluence page so the two stay connected?",
+      "category": "cross_product",
+      "difficulty": "medium",
+      "is_unsupported": false,
+      "tags": ["cross-product", "jira", "confluence"],
+      "expected": {
+        "must_refuse": false,
+        "product": null,
+        "category": "linking",
+        "heading_path": ["Use Jira Cloud with Confluence", "Smart links"],
+        "topics": [
+          "a Confluence link can be added to a Jira issue",
+          "the link is created from the issue or from the Confluence side",
+          "the linked content is shown on the issue"
+        ],
+        "notes": "product is null because the question genuinely spans two products. The answer should reference both Jira and Confluence; an answer covering only one domain is incomplete, which is exactly what SC-004 measures."
+      }
+    },
+    {
+      "id": "cross-jsm-jira-status",
+      "question": "How does a customer request in Jira Service Management relate to the status of the Jira issue that fulfils it?",
+      "category": "cross_product",
+      "difficulty": "hard",
+      "is_unsupported": false,
+      "tags": ["cross-product", "jsm", "jira"],
+      "expected": {
+        "must_refuse": false,
+        "product": null,
+        "category": "issues-and-requests",
+        "heading_path": ["What are issues and requests", "Linked issues"],
+        "topics": [
+          "the request and the linked issue are separate objects",
+          "the request reflects the customer-facing state while the issue tracks internal work",
+          "the customer's view of progress is governed by the request's own status, not the issue's"
+        ],
+        "notes": "The most substantive cross-product question in the set, and the one that most cleanly separates real cross-domain retrieval from a single good passage. A Jira-only answer or a JSM-only answer is not sufficient."
+      }
+    },
+    {
+      "id": "cross-jira-api-auth",
+      "question": "I am building an app that both manages Jira issues and reads Confluence pages through the Atlassian developer platform. What authentication does each require?",
+      "category": "cross_product",
+      "difficulty": "hard",
+      "is_unsupported": false,
+      "tags": ["cross-product", "developer", "oauth"],
+      "expected": {
+        "must_refuse": false,
+        "product": "developer",
+        "category": "oauth",
+        "heading_path": ["OAuth 2.0 (3LO)", "Scopes for OAuth 2.0 apps"],
+        "topics": [
+          "both APIs are reached with an OAuth 2.0 3LO token",
+          "the token must carry scopes covering both the Jira and the Confluence resources used",
+          "scopes are granted per resource, so accessing both products requires scopes for both"
+        ],
+        "notes": "An answer that says 'use basic auth for Confluence' is wrong for a 3LO app. Grade the cross-resource scope requirement as a required topic — that is the cross-domain content."
+      }
+    },
+    {
+      "id": "ambiguous-permissions-both",
+      "question": "How do I change permissions so the right people can see the right content?",
+      "category": "ambiguous",
+      "difficulty": "hard",
+      "is_unsupported": false,
+      "tags": ["ambiguous", "permissions"],
+      "expected": {
+        "must_refuse": false,
+        "product": null,
+        "category": null,
+        "heading_path": [],
+        "topics": [
+          "the system identifies that the question does not specify a product",
+          "the system searches more than one product domain rather than committing to one",
+          "the system states which products it searched"
+        ],
+        "notes": "This is a deliberately vague question: permissions exist in Jira, Confluence, JSM, and the developer platform, and 'content' is not a Jira concept. A correct handling searches several domains and says the question was ambiguous. A correct response that silently picks one product and gives a confident, narrow answer is a FAILURE for this question even if the answer it gives is factually accurate — edge case 13."
+      }
+    },
+    {
+      "id": "ambiguous-notifications-where",
+      "question": "How do I turn off notifications?",
+      "category": "ambiguous",
+      "difficulty": "medium",
+      "is_unsupported": false,
+      "tags": ["ambiguous", "notifications"],
+      "expected": {
+        "must_refuse": false,
+        "product": null,
+        "category": "notifications",
+        "heading_path": [],
+        "topics": [
+          "the system recognises the question spans products with different notification models",
+          "the system searches the notification documentation of more than one product",
+          "the system states the ambiguity rather than silently choosing"
+        ],
+        "notes": "Same failure mode as the permissions question: silent narrowing. A confident single-product answer, however accurate, does not pass this question."
+      }
+    },
+    {
+      "id": "ambiguous-export-data",
+      "question": "How do I export my data?",
+      "category": "ambiguous",
+      "difficulty": "medium",
+      "is_unsupported": false,
+      "tags": ["ambiguous", "export"],
+      "expected": {
+        "must_refuse": false,
+        "product": null,
+        "category": null,
+        "heading_path": [],
+        "topics": [
+          "the system does not force a single product classification",
+          "results are drawn from more than one product domain where relevant",
+          "the system reports the scope it actually searched"
+        ],
+        "notes": "Every product in the corpus has its own export mechanism. This tests that low confidence produces a WIDER search rather than a narrowed one (FR-010, FR-014)."
+      }
+    },
+    {
+      "id": "unsupported-pricing-plans",
+      "question": "How much does the Premium plan cost per user per month, and is there a volume discount?",
+      "category": "unsupported",
+      "difficulty": "easy",
+      "is_unsupported": true,
+      "tags": ["unsupported", "commercial"],
+      "expected": {
+        "must_refuse": true,
+        "product": null,
+        "category": null,
+        "heading_path": [],
+        "topics": [
+          "the system refuses rather than producing a price",
+          "the refusal states that the indexed documentation does not provide the answer"
+        ],
+        "notes": "SC-008 territory. Pricing is commercially volatile and the manifest deliberately does not include a billing source. Any specific figure is a fabrication. A refusal that invents a plausible price is a hard failure; the count of fabricated facts for this question must be 0."
+      }
+    },
+    {
+      "id": "unsupported-latest-version",
+      "question": "What is the latest released version number of the Jira Cloud platform API?",
+      "category": "unsupported",
+      "difficulty": "easy",
+      "is_unsupported": true,
+      "tags": ["unsupported", "versioning"],
+      "expected": {
+        "must_refuse": true,
+        "product": "developer",
+        "category": null,
+        "heading_path": [],
+        "topics": [
+          "the system refuses to state a version number",
+          "the refusal does not substitute a remembered or estimated value"
+        ],
+        "notes": "Version numbers change constantly and are exactly the kind of fact a language model will happily hallucinate from memory. This is the sharpest test of SC-008. fabricated_fact_count must be 0."
+      }
+    },
+    {
+      "id": "unsupported-legal-terms",
+      "question": "What are the exact liability and indemnification clauses in the standard Atlassian master subscription agreement?",
+      "category": "unsupported",
+      "difficulty": "medium",
+      "is_unsupported": true,
+      "tags": ["unsupported", "legal"],
+      "expected": {
+        "must_refuse": true,
+        "product": null,
+        "category": null,
+        "heading_path": [],
+        "topics": [
+          "the system refuses to state contract terms",
+          "the refusal does not paraphrase the agreement from model memory"
+        ],
+        "notes": "A master subscription agreement is not documentation and is not in the corpus. A paraphrase from model memory is a fabrication even if it is accurate. fabricated_fact_count must be 0."
+      }
+    },
+    {
+      "id": "unsupported-third-party-integration",
+      "question": "How do I integrate Jira with an unsupported third-party expense-tracking tool that has no public API?",
+      "category": "unsupported",
+      "difficulty": "hard",
+      "is_unsupported": true,
+      "tags": ["unsupported", "integration"],
+      "expected": {
+        "must_refuse": true,
+        "product": null,
+        "category": null,
+        "heading_path": [],
+        "topics": [
+          "the system refuses because the documentation does not cover this integration",
+          "no procedure is invented from model memory"
+        ],
+        "notes": "The tool is named as having no public API, so no documented integration can exist. This is the hardest refusal case: a model asked how to do something impossible will usually produce a confident plausible procedure. fabricated_fact_count must be 0."
+      }
+    }
+  ]
+}

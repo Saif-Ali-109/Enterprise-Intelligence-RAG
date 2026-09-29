@@ -89,6 +89,100 @@ either form until verified against the installed SDK version. Principle VII requ
 adapting to the current API rather than preserving an obsolete pattern — and equally, not
 inventing a pattern that does not exist.
 
+> ### RESOLVED 2026-09-29 — by introspection of the installed SDK (`pinecone==10.0.0`)
+>
+> The deferred question above is answered, and the answer is that **one of the two documented
+> forms does not exist in the pinned version**. This is a static result: it was obtained by
+> introspecting the installed package, with no API key and no network call, so it is a fact
+> about the SDK rather than an inference from documentation.
+>
+> ```
+> pinecone.__version__                        -> '10.0.0'
+> hasattr(Pinecone, 'create_for_model')        -> False    # the documented name is absent
+> hasattr(Pinecone, 'create_index_for_model') -> True
+> hasattr(pinecone, 'IntegratedSpec')         -> True
+> hasattr(pinecone, 'ServerlessSpec')         -> True
+> ```
+>
+> The two forms are not alternatives. `create_index_for_model` is a **convenience method on
+> `Pinecone`** taking the embedding config as a direct argument:
+>
+> ```python
+> Pinecone.create_index_for_model(
+>     self, name: str, cloud, region, embed: IndexEmbed | EmbedConfig | dict, *,
+>     tags=None, deletion_protection='disabled', read_capacity=None, schema=None, timeout=None,
+> ) -> IndexModel
+> ```
+>
+> **Correction to the note above, verified 2026-09-29.** Two claims in the earlier version of
+> this entry were wrong in ways that mattered, and both were found by executing the calls
+> rather than by reading them.
+>
+> **`create_index_for_model` is not absent — `create_for_model` is.** Introspection had
+> reported `hasattr(Pinecone, 'create_for_model') -> False` and concluded the method did not
+> exist. It does not exist *on `Pinecone`*; it exists on `Pinecone.indexes`. The two classes
+> expose different surfaces, and a negative `hasattr` on one says nothing about the other.
+> The real surface is:
+>
+> ```
+> dir(Pinecone.indexes)  -> ['configure','create','create_backup','create_for_model',
+>                            'delete','describe','describe_backup','exists','list',
+>                            'list_backups']
+> ```
+>
+> **`IntegratedSpec` is present but the 9.x route through it raises.** `hasattr` is true for
+> the class, and the class imports cleanly, so the earlier "not deprecated" reading was an
+> artefact of checking presence rather than availability. Executed against a dummy key — the
+> guard fires before any HTTP request, so this needed no network:
+>
+> ```
+> pc.indexes.create(name="x", spec=IntegratedSpec(cloud="aws", region="us-east-1", embed=EmbedConfig(...)))
+> -> pinecone.errors.exceptions.PineconeTypeError:
+>    Indexes.create() no longer accepts spec=IntegratedSpec(...) — the 2026-07 API
+>    creates integrated-embedding indexes through create_for_model instead: ...
+> ```
+>
+> The rejection message is itself the migration note, naming `create_for_model` with the exact
+> keyword form. `Pinecone.create_index` remains as a documented backwards-compatibility shim
+> forwarding to `Indexes.create`, so it fails identically and is not an escape route.
+>
+> **Four `Pinecone`-level shims are therefore deliberately avoided** in `vector_store.py`, in
+> favour of the `indexes` methods that each shim forwards to: `indexes.exists` (not
+> `has_index`), `indexes.create_for_model` (not `create_index_for_model`),
+> `indexes.describe` (not `describe_index`), and no `Pinecone.Index` constructor. This is not
+> an aesthetic preference — the shims are documented as migration aids with a narrower surface,
+> and R-008's ownership of timeouts is easier to honour against the real method.
+>
+> Further details from the same introspection, all load-bearing:
+>
+> | Question | Answer from `pinecone==10.0.0` |
+> |---|---|
+> | `IndexEmbed` fields | `model`, `field_map`, `metric`, `read_parameters`, `write_parameters` |
+> | `EmbedConfig` fields | `model`, `field_map`, **`dimension`**, `metric`, `read_parameters`, `write_parameters` |
+> | `create_index` (manual path) | `(name, spec, dimension, metric, vector_type, …)` — the caller supplies `dimension` and `metric`, which is precisely what Principle VII forbids |
+> | `Pinecone.has_index` | `(name: str) -> bool` — the cheapest truthful readiness probe, and what `routes_health` uses |
+> | `Index.search` | keyword-only: `(namespace, top_k, inputs, vector, id, filter, fields, rerank, match_terms, query, timeout)` — there is no `include_values`; returned fields are selected with `fields=` |
+> | `Inference.rerank` | `(model, query, documents, rank_fields=['text'], return_documents=True, top_n=None, parameters=None) -> RerankResult` |
+> | `Inference.embed` | `(model, inputs, parameters=None) -> EmbeddingsList` |
+> | `RerankModel` members | `Bge_Reranker_V2_M3`, `Cohere_Rerank_3_5`, `Pinecone_Rerank_V0` — so `bge-reranker-v2-m3` (R-004) is a valid name in this version |
+>
+> **Why `create_index_for_model` is the correct answer on the merits, not merely the available
+> one.** `create_index` requires the caller to state `dimension` and `metric`; the integrated
+> path lets Pinecone derive both from the named model. The contract's `index.dimension_source`
+> is `const: 'service'` — the claim is that dimensionality is read from service configuration
+> and never hard-coded. On the `create_index` path this codebase would have to *assert* that
+> claim; on the `create_index_for_model` path the service sets the dimension and the
+> application never holds an opinion about it, so the claim is true by construction.
+>
+> **What this note does NOT resolve.** The `input_type` question above remains open, and it is
+> the job of T027's *execution*. Whether an over-length chunk is silently truncated or rejected
+> is a property of the hosted service, not of the SDK, and Pinecone's own documentation says a
+> mismatch "quietly degrades" search quality while both calls succeed. That cannot be
+> introspected and must be measured against a live index. R-001's
+> `CHUNK_TARGET_MAX_TOKENS=1000` against the model's 2048-token ceiling is what keeps chunk
+> inputs out of the danger range; the smoke test is what proves the ceiling is real. Until
+> T027 has been *run*, the input-type behaviour is unverified and no code path may assume it.
+
 ---
 
 ## R-003: Write and read paths
@@ -134,18 +228,27 @@ field sent for embedding.
 call would couple retrieval and reranking into one vendor round trip and make the
 substitution impossible without rewriting the retriever. A separate call keeps the
 `Reranker` interface honest and lets the retriever's 12-candidate pool and the reranker's
-top-5 be configured and tested independently (FR-019, FR-020).
+top-6 be configured and tested independently (FR-019, FR-020).
 
 ```python
 rr = pc.inference.rerank(
     model="bge-reranker-v2-m3",
     query=original_query,
     documents=[c.text for c in candidates],
-    top_n=5,
+    top_n=6,
     return_documents=False,
 )
 # rr.data[i].score normalised to [0,1]; higher is more relevant
 ```
+
+> **Amendment, 2026-09-29.** R-004 originally specified `top_n=5`. That was
+> arithmetically unsatisfiable: evidence is selected from the reranked set, and
+> FR-020 requires three to six evidence units, so a 5-wide rerank cannot produce six.
+> The budget is now 12 → 6 → 3–6, with `top_n=6`. The stage-independence argument above
+> is unaffected — it is about not fusing two stages, not about the number. `config.py`
+> now refuses at startup to start if `evidence_max_units` exceeds
+> `retrieval_rerank_top_n`, so this class of contradiction is a startup error rather
+> than a silently capped evidence set.
 
 **Alternatives considered**:
 - Fused `search(rerank=…)` — rejected as above; couples two pipeline stages to one API call.
@@ -379,34 +482,73 @@ though the model would technically accept it.
 
 ---
 
-## R-014: Suppressing model reasoning — an FR-034 leak that is easy to walk into
+## R-014: Model reasoning is received and never exposed — FR-034 discharged at the boundary
 
-**Decision**: explicitly disable reasoning exposure on **every** provider call, and make
-the response parser drop any unknown key rather than pass it through.
+**Decision**: read exactly one field out of the provider's message — `content` — and build a
+`Completion` that has no field capable of carrying anything else. Everything else the
+provider sends is discarded at the adapter boundary. A post-condition walks the constructed
+value on every return, and a text heuristic catches deliberation inlined into `content`.
 
-**Rationale**: Groq's current default generation models are **reasoning** models. The API
-exposes `reasoning_format` (`hidden` / `raw` / `parsed`) and an `include_reasoning` toggle,
-and `reasoning_effort` defaults to `medium` for the gpt-oss family. Left alone, raw
-reasoning can come back in the message content — and any of it that reaches a response,
-an SSE event, or a log line is a direct FR-034 violation, the one requirement the spec
-treats as absolute ("MUST NOT expose private model reasoning or internal deliberation in
-any response, event, or view").
+**Revised 2026-09-29 by measurement.** The original decision for this finding was to
+"explicitly disable reasoning exposure on every provider call" using `include_reasoning=False`
+and `reasoning_format="hidden"`. That is **wrong on this surface, and had it been implemented
+would have failed on the first query.** The controls named do not exist on Groq's
+OpenAI-compatible endpoint. Measured against a live account on 2026-09-29:
 
-The default is the hazard here, not an explicit opt-in. Three controls, all required:
+| Probe | Result |
+|---|---|
+| `reasoning_effort="none"` | HTTP 400 `` `reasoning_effort` must be one of `low`, `medium`, or `high` `` |
+| `openai/gpt-oss-120b`, effort `low` | `message` keys `[content, reasoning, role]`; `reasoning` 23 chars; `reasoning_tokens` 5 |
+| `openai/gpt-oss-120b`, effort `high` | `message` keys `[content, reasoning, role]`; `reasoning` 578 chars; `reasoning_tokens` 124 |
+| `openai/gpt-oss-20b`, effort `low` | `message` keys `[content, reasoning, role]`; `reasoning` 18 chars; `reasoning_tokens` 5 |
+| `openai/gpt-oss-20b`, effort `high` | `message` keys `[content, reasoning, role]`; `reasoning` 407 chars; `reasoning_tokens` 94 |
 
-1. **Provider call**: set `include_reasoning=False` and `reasoning_format="hidden"`
-   explicitly. Do not rely on a default.
-2. **Response parser**: unmarshal into the declared Pydantic model and discard unknown
-   fields. Never pass a raw provider dict through to a response or event.
-3. **Contract test**: the event schemas in [contracts/events.md](./contracts/events.md)
-   contain no reasoning, thought, or deliberation field, and a test asserts the generator's
-   request payload cannot request reasoning.
+Three conclusions, and the first is the one that changed the implementation:
 
-**Latency note**: `reasoning_effort` defaults to `medium` on gpt-oss models, which spends
-tokens and wall-clock time even when the reasoning is hidden and discarded. Setting
-`low` (or `none` where supported) on the query-classification path removes that cost and
-directly supports SC-017. Classification is a cheap judgement task; extended deliberation
-buys nothing.
+1. **There is no parameter that turns the channel off.** `none` is rejected, and every
+   accepted effort returns a populated `message.reasoning`. The only lever is `low`, which
+   reduces the tokens spent on deliberation (5 vs 124 on the 120B) without removing it.
+   So the control cannot be a request parameter.
+2. **FR-034 is about exposure, not receipt.** It says the system MUST NOT *expose* private
+   model reasoning — not that it must not receive it. A provider reasoning is permitted; a
+   reader of this system seeing it is not. The obligation falls on the emitted surface, which
+   is the one place the system controls.
+3. **An earlier reading of this finding would have been catastrophic, not merely strict.**
+   Refusing any response containing a reasoning key — the shape the original decision implies
+   — fails on **every** query from a reasoning model, because both configured models reason
+   by default. That is a system that cannot answer anything, defended under the banner of
+   protecting a requirement. The `assert_no_reasoning` check is retained, retargeted at the
+   value *about to be returned* rather than the provider's envelope.
+
+**Why reading one field rather than filtering keys.** The obvious alternative is walking the
+response and dropping anything matching `REASONING_KEY_PATTERN`. That is denylist-shaped, so it
+stays correct for responses that do not reason and silently passes on the next novel key name
+a provider invents. `Completion` is built from `content` alone, which has no equivalent
+failure. The post-condition then walks dataclass fields, so a future `Completion.reasoning` is
+a run-time failure rather than a new field that satisfies every type checker and no requirement.
+
+**Two checks, because they catch different things.** The structural check proves no field exists
+that could carry deliberation; it cannot prove the *content* is free of it, since a model can
+inline "First, let us consider…" where no key betrays it. `text_looks_like_reasoning` is the
+second check and is documented as the heuristic it is: a false positive refuses an answer that
+was fine, which is the correct direction for a MUST NOT to fail in.
+
+**What is recorded about the discard.** The boundary reports *that* a channel was dropped and
+how many `reasoning_tokens` it cost — never the text, in a log or an exception, because a quoted
+leak has only moved rooms. A silent discard is otherwise indistinguishable from a service that
+stopped reasoning, and those two have different causes and different costs.
+
+**`reasoning_effort` is therefore a cost control, not a compliance control.** It is set to
+`low` on all calls, `Literal["low", "medium", "high"]` in settings so an unsupported value
+fails at startup rather than as a 400 on the first real query, and R-014's original latency
+note about SC-017 still holds: at `high` the 120B spends 124 tokens deliberating a one-sentence
+answer, and that spend buys nothing when the result is discarded.
+
+**Contract test**: the event schemas in [contracts/events.md](./contracts/events.md) contain no
+reasoning, thought, or deliberation field. The sole reasoning-named field anywhere is
+`reasoning_exposed: false` on `GET /config`, which is the attestation that this decision is in
+force — `tests/contract/test_openapi_conformance.py` asserts it exists, is constant `False`, and
+is the only such name.
 
 ---
 

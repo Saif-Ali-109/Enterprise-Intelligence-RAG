@@ -1,0 +1,98 @@
+# Enterprise Knowledge Intelligence RAG — three services, one command.
+#
+# Secrets are NEVER baked in. No service receives a credential through the
+# compose file, an image layer, or a build argument. Each reads its own
+# configuration from the environment at runtime, and `.env` is git-ignored
+# (FR-042, Constitution IX).
+#
+# `docker compose up` will start without `.env` and the backend will exit
+# non-zero on the two missing keys, naming them. That is deliberate: failing
+# loudly at startup beats starting degraded.
+
+name: enterprise-knowledge-rag
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: knowledge
+      POSTGRES_PASSWORD: knowledge
+      POSTGRES_DB: knowledge
+    ports:
+      # Bound to loopback. This is a single-operator local tool; the database is
+      # not part of the demonstration surface and has no reason to be reachable
+      # from the network.
+      #
+      # The host port is POSTGRES_PORT, defaulting to the conventional 5432. A
+      # developer who already runs PostgreSQL locally sets it to something else
+      # — the database is not reachable from another host either way, and a
+      # port collision is the single most common reason `make up` fails on a
+      # machine that is not a clean CI container. DATABASE_URL must match.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # `backend` waits for this to pass, so the first migration never races an
+      # unready database.
+      test: ["CMD-SHELL", "pg_isready -U knowledge -d knowledge"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://knowledge:knowledge@postgres:5432/knowledge
+      # GROQ_API_KEY and PINECONE_API_KEY are passed through from the host
+      # environment, NOT defaulted here. If they are absent the backend exits at
+      # startup and says so, rather than serving a degraded system.
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      PINECONE_API_KEY: ${PINECONE_API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request,sys;
+          sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/health',
+          timeout=5).status == 200 else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    command:
+      - sh
+      - -c
+      - >-
+        alembic upgrade head &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    environment:
+      # Held server-side. The browser never receives a backend URL or a
+      # credential; it talks only to this app's own route handlers.
+      BACKEND_BASE_URL: http://backend:8000
+      NODE_ENV: production
+    ports:
+      - "127.0.0.1:3000:3000"
+
+volumes:
+  postgres_data:

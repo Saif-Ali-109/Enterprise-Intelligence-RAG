@@ -1,0 +1,73 @@
+{
+  "manifest_version": "1.0.0",
+  "generated_at": "2026-09-29T00:00:00Z",
+  "notes": "Source entry points only. No page content is recorded here or anywhere in this repository (FR-032, SC-015) — the corpus is fetched at run time and lives in the vector store, which is not in version control. contracts/source-manifest.schema.json has no field in which content could be recorded, so scripts/validate_datasets.py refuses the file if one is added. --- T018 crawling-permission check, performed 2026-09-29 against each host's live /robots.txt: support.atlassian.com disallows /contact/* and /jira-service-desk-cloud-deprecated/* only; developer.atlassian.com disallows /platform/forge/ui-kit-components/uik1_all only. Every start_url below was checked against those directives and none is permitted-blocked, so all six are crawl-permitted. --- DELIBERATELY EXCLUDED: confluence.atlassian.com. Its robots.txt sets 'crawl-delay: 60' for User-agent: *, which a bounded demonstration crawl with a 1s inter-request delay cannot honour. Rather than crawl in violation of the site's stated directive, or inflate a bounded crawl to 100 pages x 60s, that host is excluded and Confluence documentation is taken from support.atlassian.com instead. --- SCOPE RULE: a crawl is bounded to its start_url's host AND its start_url's path prefix. Depth 2 from a /docs/ entry point therefore walks that documentation section rather than the whole site. This is why the start_urls are real pages from the published sitemaps and not bare section indexes: the bare indexes (/jira-software-cloud/docs/ and its siblings) return HTTP 404, which is itself a finding worth recording. --- Sitemap sources used to select the start_urls: https://support.atlassian.com/sitemap.xml (sub-sitemaps jira-cloud, jira-cloud-administration, confluence-cloud, jira-service-management-cloud) and https://developer.atlassian.com/sitemap.xml (sub-sitemaps cloud/jira/platform, cloud/jira/service-desk). Both sitemaps are themselves permitted by robots.txt. --- Independent technical demonstration. Not affiliated with, sponsored by, or endorsed by Atlassian or any documentation publisher. Every ingested page links back to the publisher's original URL.",
+  "sources": [
+    {
+      "name": "Jira Cloud — user documentation",
+      "start_url": "https://support.atlassian.com/jira-software-cloud/docs/access-a-project/",
+      "product_domain": "jira",
+      "allowed_domains": ["support.atlassian.com"],
+      "max_pages": 40,
+      "max_depth": 2,
+      "delay_seconds": 1.0,
+      "enabled": true,
+      "notes": "End-user and project-configuration documentation. The largest single share of the demonstration corpus, and the primary source for simple-lookup and troubleshooting questions. Scope is bounded to the /jira-software-cloud/docs/ path prefix."
+    },
+    {
+      "name": "Jira Cloud — administration",
+      "start_url": "https://support.atlassian.com/jira-cloud-administration/docs/set-up-jira-products/",
+      "product_domain": "jira",
+      "allowed_domains": ["support.atlassian.com"],
+      "max_pages": 25,
+      "max_depth": 2,
+      "delay_seconds": 1.0,
+      "enabled": true,
+      "notes": "Site and instance administration: configuration schemes, security, data import/export. Kept as a separate source from user documentation so the two can be filtered independently and so a re-crawl of one does not disturb the other. This is where the permissions-category questions are drawn from."
+    },
+    {
+      "name": "Confluence Cloud — user documentation",
+      "start_url": "https://support.atlassian.com/confluence-cloud/docs/create-and-organize-work-in-confluence-cloud/",
+      "product_domain": "confluence",
+      "allowed_domains": ["support.atlassian.com"],
+      "max_pages": 20,
+      "max_depth": 2,
+      "delay_seconds": 1.0,
+      "enabled": true,
+      "notes": "Present so cross-product questions are answerable: a question spanning Jira and Confluence needs both domains indexed, which is what makes US4 and SC-004 testable rather than notional."
+    },
+    {
+      "name": "Jira Service Management Cloud — user documentation",
+      "start_url": "https://support.atlassian.com/jira-service-management-cloud/docs/what-are-issues-and-requests/",
+      "product_domain": "jsm",
+      "allowed_domains": ["support.atlassian.com"],
+      "max_pages": 20,
+      "max_depth": 2,
+      "delay_seconds": 1.0,
+      "enabled": true,
+      "notes": "The third product domain, which is what makes a genuine three-way cross-product question possible. JSM has a deliberately confusing object model (requests, issues, customer requests) and is a good test of whether the chunker preserves structure."
+    },
+    {
+      "name": "Jira Cloud platform — REST API documentation",
+      "start_url": "https://developer.atlassian.com/cloud/jira/platform/",
+      "product_domain": "developer",
+      "allowed_domains": ["developer.atlassian.com"],
+      "max_pages": 30,
+      "max_depth": 2,
+      "delay_seconds": 1.0,
+      "enabled": true,
+      "notes": "API reference. Chosen deliberately: this is where code blocks and parameter tables are densest, so it is the source that most exercises the structure-aware chunker (FR-015) and the code-never-splits-mid-example rule (FR-015). Without it the 'non-zero code and table block types' assertion in quickstart V2 would be easy to pass accidentally."
+    },
+    {
+      "name": "Jira Service Management Cloud — REST API documentation",
+      "start_url": "https://developer.atlassian.com/cloud/jira/service-desk/",
+      "product_domain": "developer",
+      "allowed_domains": ["developer.atlassian.com"],
+      "max_pages": 20,
+      "max_depth": 2,
+      "delay_seconds": 1.0,
+      "enabled": true,
+      "notes": "Second developer-platform source, covering the JSM REST surface. Together with the entry above it gives the api-category questions two products to distinguish, so a question asking about the JIRA API is not satisfied by JSM material."
+    }
+  ]
+}
