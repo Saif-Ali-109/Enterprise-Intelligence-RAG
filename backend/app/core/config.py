@@ -164,8 +164,32 @@ class Settings(BaseSettings):
     chunk_target_max_tokens: int = 1000
     chunk_overlap_tokens: int = 100
     chunk_min_useful_tokens: int = 50
-    # R-013: the estimator's effective ceiling, so a 2048-token model limit is
-    # never approached. 2048 x 0.75 = 1536.
+
+    # **The load-bearing size bound, measured 2026-09-30.** T027 wrote to a live
+    # index and read this off a rejection:
+    #   `Metadata size is 76009 bytes, which exceeds the limit of 40960 bytes
+    #    per vector`
+    # It is a *byte* limit, the record's text counts against it, and exceeding it
+    # **rejects the write** — so an over-large chunk is a hard ingest error, not
+    # a silently incomplete embedding.
+    #
+    # This is a service constant, not a preference, and it is the one bound that
+    # can refuse a record. `embed_max_record_bytes` below is what the chunker
+    # aims at, leaving room for the metadata that travels with the text.
+    embed_bytes_per_vector: int = 40960
+
+    # The fraction of the limit one record's *text* may occupy. The remainder
+    # carries `heading_path`, `source_url`, `document_id` and the rest of
+    # data-model.md §5, plus JSON overhead in the request. Measured: prose is
+    # ~5,140 bytes per 1,000 tokens, so half the limit leaves ~4x for all of it.
+    embed_text_byte_fraction: float = 0.5
+
+    # R-013's token ceiling, retained as defence in depth and **no longer the
+    # binding bound**. T027 showed the service does not truncate at the model's
+    # 2,048-token limit at all — a marker in the final bytes of a 38,350-byte
+    # record is still findable — so this guards a limit that does not bind. Kept
+    # because a hosted service can change behaviour without notice, and one extra
+    # comparison is cheaper than discovering that.
     embed_hard_token_limit: int = 2048
     embed_safety_factor: float = 0.75
 

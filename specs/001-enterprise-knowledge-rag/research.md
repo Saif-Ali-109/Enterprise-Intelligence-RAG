@@ -662,6 +662,58 @@ rather than on preference.
 `hard_limit × 0.75`, so a unit that the estimator believes is 1600 tokens is split even
 though the model would technically accept it.
 
+### Amendment 2026-09-30 — the 10% calibration target is not achievable, and should not be
+
+R-013 asks for a local estimator within **10%** of a reference tokenizer, and says the
+fallback if calibration fails is to adopt the reference tokenizer. T054 began by measuring,
+and the target turns out to be **structurally unreachable** rather than merely unmet.
+
+**Why.** Token density varies by a factor of **4.4x** across realistic documentation blocks,
+measured against `bert-base-uncased`:
+
+| Block | chars/token | 1000 tokens would be |
+|---|---|---|
+| dense code (`{"a":1,"b":2,...}`) | 0.98 | 980 bytes |
+| prose | 4.35 | 4,350 bytes |
+| table row | 1.38 | 1,380 bytes |
+| URL / id runs | 2.77 | 2,770 bytes |
+
+For a single `chars ÷ d` heuristic to be within 10% of all of these, `d` would have to
+satisfy `3.96 ≤ d ≤ 0.89` — **an empty interval**. No constant divisor exists. Four
+candidates were measured over 38 real Atlassian blocks; the best had a mean error of 0.127
+and 16 of 38 blocks outside 10%, and a word-count estimator failed *worse* than 10% on code
+(−98%) because code has few words and many tokens.
+
+**So the fallback clause applies, and it should be taken — but for a different reason than
+the one recorded here.** R-013's stated reason for avoiding a tokenizer was that the embedder
+is hosted, so any local count approximates a token definition "we cannot see", and that
+2x headroom against the 2,048-token limit absorbs the error. **T027 removed the premise.**
+The service does not truncate at 2,048 tokens at all; the binding constraint is a **byte**
+limit — 40,960 bytes per vector (see the R-003 amendment) — and it is ~5.9x above a
+1,000-token chunk in the worst measured case. The precision that a tokenizer would buy is
+being spent against a limit that is **not the one that binds**.
+
+**The decision this changes.** Precision was never the requirement; the requirement is never
+writing a record the service rejects. That is checkable in bytes, exactly, with no tokenizer
+and no calibration:
+
+| Bound | Measured limit | How the code should enforce it |
+|---|---|---|
+| Vector size (rejects the write) | **40,960 bytes/vector** | Checked directly. Exact, no estimator involved. |
+| Chunk size (quality target) | 600–1000 tokens | Estimated; error is tolerable because 1,000 tokens is ≤6,898 bytes against a 40,960-byte limit |
+
+`embed_hard_token_limit` (2,048) and `embed_safety_factor` (0.75) are **retained** as
+defence in depth, but they are no longer the load-bearing bound and the naming should not
+imply otherwise. The new load-bearing setting is a byte ceiling, and it is checked in bytes.
+
+**What is still true of R-013.** The 10% figure is retired as a target, not as an
+observation: the measurement that retires it is above, and it is reproducible from the
+table. The recorded fallback — adopt a reference tokenizer — is **declined**, on the grounds
+that the embedder's own tokenizer remains unavailable and adding a general-purpose one would
+buy precision against the wrong tokenizer to guard a limit that is not the binding one. This
+is recorded rather than quietly dropped, because "we tried and the target was wrong" and
+"we changed our mind" are different facts and only one of them is reversible.
+
 ---
 
 ## R-014: Model reasoning is received and never exposed — FR-034 discharged at the boundary
