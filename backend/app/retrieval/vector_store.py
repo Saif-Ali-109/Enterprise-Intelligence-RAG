@@ -368,7 +368,11 @@ class PineconeVectorStore:
             return VectorServiceUnavailable()
 
         if isinstance(exc, PineconeApiException):
-            status = getattr(exc, "status", None)
+            # `status_code`, not `status`. The latter is not an attribute of
+            # `ApiError` in pinecone==10.0.0, so reading it returned `None` on
+            # every call and the 401/403 branch below was unreachable — the
+            # exact branch the docstring claims to implement.
+            status = getattr(exc, "status_code", None)
             _log.error(
                 "vector service rejected a call",
                 extra={"operation": operation, "status": status, "error": detail},
@@ -377,11 +381,28 @@ class PineconeVectorStore:
                 return ProviderError("The vector service rejected the configured credential.")
             return ProviderError()
 
+        # A *plain* `ApiError` is the parent of `PineconeApiException`, not a
+        # sibling, so this branch catches dimension mismatches and other bare
+        # service rejections. T027 hit exactly this: an upsert sent the wrong
+        # shape came back as
+        # `ApiError: [400] Vector dimension 1 does not match the dimension of
+        # the index 1024`, which the branch above does not catch. It fell through
+        # to the return below and inherited `ProviderError`'s default message —
+        # "The language model provider failed" — sending an operator to debug
+        # Groq when the fault was a 1024-versus-1 vector in this application's
+        # own write path.
+        #
+        # `VectorServiceUnavailable` rather than `ProviderError` because the
+        # remedy differs: this is a request the vector service understood and
+        # refused, not a credential and not a language model. The messages are
+        # named at each return for the same reason — telling three faults apart
+        # is the entire job of this function, and a default message identifies
+        # none of them.
         _log.error(
-            "vector store call failed",
+            "vector service call failed",
             extra={"operation": operation, "error_type": name, "error": detail},
         )
-        return ProviderError()
+        return VectorServiceUnavailable()
 
     async def _call(self, operation: str, func: Any, /, *args: Any, **kwargs: Any) -> Any:
         """Run a blocking SDK call off the event loop, translating failures."""
@@ -488,10 +509,23 @@ class PineconeVectorStore:
     ) -> BatchResult:
         """Write records; the service embeds each with `input_type=passage`.
 
-        Batched. Pinecone accepts an array of vectors in one call, and one call
-        per chunk would be one HTTP round trip per chunk — for a 100-page
-        corpus at 40 chunks per page, four thousand round trips. `UPSERT_BATCH`
-        is a service-side bound, not a tuning knob invented here.
+        **Uses `upsert_records` with the text, never `upsert` with `values`.**
+        This was the first thing T027 measured against a live index, and the
+        measurement contradicted the code: sending `values=[0.0]` is rejected
+        outright with
+
+            [400] Vector dimension 1 does not match the dimension of the index 1024
+
+        There is no zero-vector placeholder convention on this surface. The
+        service embeds from the schema's `semantic_text` field, so the text must
+        be handed over under that field's name and the vector must be omitted
+        entirely. R-003 said exactly this and the code did not follow it, which
+        is the failure mode research notes are supposed to prevent.
+
+        Batched. Pinecone accepts an array of records in one call, and one call
+        per chunk would be one HTTP round trip per chunk — for a 100-page corpus
+        at 40 chunks per page, four thousand round trips. `UPSERT_BATCH` is a
+        service-side bound, not a tuning knob invented here.
         """
         if not records:
             return BatchResult(written=0, submitted=0)
@@ -507,20 +541,16 @@ class PineconeVectorStore:
         # matters — the chunk size — is already configuration.
         for start in range(0, submitted, _UPSERT_BATCH):
             batch = records[start : start + _UPSERT_BATCH]
-            vectors = [
-                {"id": record.id, "values": _PLACEHOLDER_VALUES, "metadata": record.metadata}
-                for record in batch
-            ]
+            vectors = [_record_payload(record) for record in batch]
 
-            # `_PLACEHOLDER_VALUES` is the integrated-embedding convention: a
-            # zero-vector of unspecified length that the service replaces with a
-            # real embedding. The `dimension` argument is deliberately absent —
-            # on an integrated index the service determines it (R-002).
+            # No `dimension`, no `values`: the service derives both from the
+            # index schema (R-002, R-005). Stating either would be Principle VII
+            # violated, and stating `values` is additionally a hard 400.
             result = await self._call(
                 "upsert",
-                self.index.upsert,
-                vectors=vectors,
+                self.index.upsert_records,
                 namespace=target_namespace,
+                records=vectors,
             )
             written += _acknowledged_count(result, len(batch))
 
@@ -706,15 +736,20 @@ async def ensure_index(
     function, all from introspecting `pinecone==10.0.0` rather than from
     documentation, and the first one is a name that does not exist at all:
 
-    - **`create_for_model` does not exist** on the `Pinecone` client. The method
-      is `create_index_for_model`.
-    - **`Pinecone.create_index_for_model` is itself a backwards-compatibility
-      shim.** Its own docstring — quoted here rather than paraphrased, because
-      the direction is the whole point — says: *"Backwards-compatibility shim for
+    - **`create_for_model` does not exist on the `Pinecone` client** — it exists
+      on `Pinecone.indexes`. The two classes expose different surfaces, so a
+      negative `hasattr` on one says nothing about the other. This calls
+      `pc.indexes.create_for_model`.
+    - **`Pinecone.create_index_for_model` is a backwards-compatibility shim.**
+      Its own docstring — quoted rather than paraphrased, because the direction
+      is the whole point — says: *"Backwards-compatibility shim for
       `Pinecone.indexes.create_for_model`. New code should use
-      `pc.indexes.create_for_model()` instead."* This calls the `indexes` form.
+      `pc.indexes.create_for_model()` instead."*
     - **`Pinecone.has_index` is a shim too**, for `indexes.exists`, and this uses
       the latter for the same reason.
+    - **`pc.indexes.create(spec=IntegratedSpec(...))` raises** `PineconeTypeError`
+      in 10.0.0, naming `create_for_model` as the replacement. The class is still
+      importable, so `hasattr` says yes while the code path is unavailable.
 
     `embed` is passed as a **dict**, which is the form the SDK's own worked
     example uses, rather than as an `IndexEmbed` or `EmbedConfig` object. The
@@ -777,15 +812,15 @@ async def ensure_index(
 #: The vector-store bound on one upsert call.
 _UPSERT_BATCH: int = 100
 
-#: The zero-vector placeholder Pinecone's integrated-embedding upsert expects.
-#: Replaced server-side by the model's embedding. One element, not a full
-#: dimension: the service determines the real dimension, and specifying one here
-#: would pin the index to a number this application has no way to know (R-002).
-_PLACEHOLDER_VALUES: list[float] = [0.0]
-
 #: The metadata key the text is stored under, matching `field_map`. Named once
 #: and used by the upsert, the fetch, and the search field selection, so the
 #: three cannot disagree about where the text lives.
+#:
+#: It is also the *schema* field name, which is why an upsert sends the text
+#: here as a top-level record key rather than inside `metadata`. T027 measured
+#: this: `upsert` with `values=[0.0]` returns
+#: `Vector dimension 1 does not match the dimension of the index 1024`, while
+#: `upsert_records` with this key at the top level succeeds.
 _TEXT_FIELD: str = "chunk_text"
 
 
@@ -816,20 +851,76 @@ def _parameter(parameters: Any, key: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _record_payload(record: VectorRecord) -> dict[str, Any]:
+    """One record in the shape `upsert_records` accepts: fields at the top level.
+
+    Three measured facts about this shape, all from T027 running against a live
+    index, and each one a hard 400 when got wrong:
+
+    - The id field is `_id`. The SDK documents `id` as accepted-and-dropped, but
+      the service's own errors name records by `_id`, so this is the field an
+      error can be read back from.
+    - The text sits under the schema's `semantic_text` field name, at the top
+      level, because that is the field the service embeds from.
+    - **Metadata keys are top level too, not nested.** A nested
+      `{"metadata": {...}}` is rejected with `Invalid type for field 'metadata'`;
+      the service has no nested-object metadata. Scalars, booleans, and lists of
+      strings all round-trip — `heading_path` survives as a real list, which
+      FR-018 depends on.
+
+    The collision check exists because the metadata is spread last and would
+    otherwise win silently. A metadata key of `chunk_text` or `_id` would
+    replace the text or the identity of the record, and the service would accept
+    the write — so the corruption would surface as a citation pointing at the
+    wrong text, with no error anywhere. It is raised rather than dropped: the
+    caller is passing metadata it should not be passing, and quietly discarding
+    it would leave the pipeline believing the unit was indexed with data it was
+    not.
+    """
+    reserved = {key for key in record.metadata if key in ("_id", "id", _TEXT_FIELD)}
+    if reserved:
+        raise ValueError(
+            f"record {record.id!r} carries metadata key(s) {sorted(reserved)} that collide "
+            f"with the record's own fields ('_id', {_TEXT_FIELD!r}); they would be "
+            "overwritten on the way to the service"
+        )
+
+    return {
+        "_id": record.id,
+        _TEXT_FIELD: record.text,
+        **record.metadata,
+    }
+
+
 def _acknowledged_count(result: Any, attempted: int) -> int:
     """How many records the service says it accepted.
 
-    A `None` or unrecognised response is reported as the attempted count, not as
-    zero. The service's own `upsert` returns a bare `{}` on success in some
-    versions, and reporting 0 there would make a successful ingest look like a
-    total write failure — while reporting the attempted count when the service
-    is merely uncommunicative is the safer error, because a later read will
-    reveal a shortfall while a false alarm stops the pipeline for no reason.
+    **Reads `record_count`, the field on the real `UpsertRecordsResponse`.** It
+    used to read `upsertedCount`, which belongs to the older `upsert` reply. On
+    the `upsert_records` path that name is simply absent, so the function fell
+    through to its last line and returned `attempted` — meaning **every write was
+    reported as fully successful regardless of what the service actually
+    acknowledged**. A short write would have surfaced much later as an
+    unanswerable question with no ingestion error to explain it, which is
+    precisely the failure `BatchResult.written` exists to prevent.
+
+    `upsertedCount` is still read, for a mapping-shaped response. It is not dead
+    weight: a dict is what a caller passing a hand-built stub would get, and
+    silently returning `attempted` for it would repeat the bug above.
+
+    An unrecognised response is reported as the attempted count, not as zero. A
+    `None` or unexpected shape is the service being uncommunicative, and
+    reporting the attempted count is the safer error: a later read will reveal a
+    shortfall, whereas a false alarm stops the pipeline for no reason.
     """
     if isinstance(result, dict):
-        count = result.get("upsertedCount")
-        if isinstance(count, int):
-            return count
+        for name in ("record_count", "upsertedCount"):
+            count = result.get(name)
+            if isinstance(count, int):
+                return count
+    record_count = getattr(result, "record_count", None)
+    if isinstance(record_count, int):
+        return record_count
     if isinstance(result, int):
         return result
     return attempted

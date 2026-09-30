@@ -241,10 +241,22 @@ class TestSearchRequestShape:
 
 
 class TestUpsert:
-    async def test_upsert_sends_no_dimensions(self, fake_pinecone: FakePineconeClient) -> None:
-        """The service derives the dimension. Sending one would pin it to a guess.
+    async def test_upsert_sends_no_dimensions_and_no_vectors(
+        self, fake_pinecone: FakePineconeClient
+    ) -> None:
+        """The service derives the dimension, and the text is what it embeds.
 
-        This is the code-level half of `dimension_source: 'service'`.
+        This is the code-level half of `dimension_source: 'service'`, and it was
+        wrong on the second half until T027 ran against a live index. The
+        adapter sent `values=[0.0]` on the belief that a zero vector was the
+        integrated-embedding placeholder; the service rejects it outright with
+        `Vector dimension 1 does not match the dimension of the index 1024`.
+
+        R-003 had already ruled this out — "write with `upsert_records` (text +
+        metadata, no `values`)" — so the research note was right and the code did
+        not follow it. That is the failure mode a written decision is supposed to
+        prevent, and it survived a written test, because the test asserted the
+        wrong behaviour was correct.
         """
         from app.retrieval.vector_store import PineconeVectorStore, VectorRecord
 
@@ -253,24 +265,82 @@ class TestUpsert:
 
         call = fake_pinecone.index_handle.upsert_calls[0]
         assert "dimension" not in call
-        vector = call["vectors"][0]
-        assert "dimension" not in vector
-        # The integrated-embedding placeholder, not a computed vector.
-        assert vector["values"] == [0.0]
+        assert "vectors" not in call, "the write must go through upsert_records, not upsert"
+        assert "records" in call
 
-    async def test_record_text_is_stored_in_the_mapped_metadata_field(
-        self, fake_pinecone: FakePineconeClient
-    ) -> None:
-        from app.retrieval.vector_store import _TEXT_FIELD, PineconeVectorStore, VectorRecord
+        record = call["records"][0]
+        assert "dimension" not in record
+        # No `values` key at all. A zero vector is not a placeholder here; it is
+        # a 400.
+        assert "values" not in record, f"a `values` key was sent: {record.get('values')!r}"
+
+    async def test_metadata_is_flat_not_nested(self, fake_pinecone: FakePineconeClient) -> None:
+        """Measured: the service has no nested-object metadata.
+
+        A nested `{"metadata": {...}}` is rejected with `Invalid type for field
+        'metadata' in record ... got '{"product":"jira"}'` — the service reads
+        the stringified object and rejects its type. The SDK's own docstring shows
+        the shape: `{"_id": ..., "text": ...}` with the fields alongside.
+
+        This one is worth a test of its own because the failure is not local: a
+        rejected upsert is caught, reported, and the whole ingest stops. The
+        shape has to be right in the adapter, not discovered one batch at a time
+        against a billable service.
+        """
+        from app.retrieval.vector_store import PineconeVectorStore, VectorRecord
 
         store = PineconeVectorStore(client=fake_pinecone)
         await store.upsert(
-            [VectorRecord(id="u-1", text="body", metadata={_TEXT_FIELD: "body", "product": "jira"})]
+            [
+                VectorRecord(
+                    id="u-1",
+                    text="body",
+                    metadata={"product": "jira", "chunk_index": 3, "is_code": False},
+                )
+            ]
         )
 
-        metadata = fake_pinecone.index_handle.upsert_calls[0]["vectors"][0]["metadata"]
-        assert metadata[_TEXT_FIELD] == "body"
-        assert metadata["product"] == "jira"
+        record = fake_pinecone.index_handle.upsert_calls[0]["records"][0]
+        assert "metadata" not in record, f"metadata was nested: {record!r}"
+        assert record["product"] == "jira"
+        assert record["chunk_index"] == 3
+        assert record["is_code"] is False
+
+    async def test_a_heading_path_survives_as_a_real_list(self) -> None:
+        """FR-018 needs the heading path per chunk, and it must not be flattened.
+
+        A `heading_path` joined into `"A > B"` would still display, but it could
+        no longer be compared against another unit's path to decide whether two
+        units are in the same section — which is how the chunker finds where a
+        section ends. Verified against the live index: the list comes back as a
+        list.
+        """
+        from app.retrieval.vector_store import VectorRecord, _record_payload
+
+        path = ["Jira Cloud", "Filters", "Create a filter"]
+        payload = _record_payload(
+            VectorRecord(id="u-1", text="body", metadata={"heading_path": path})
+        )
+
+        assert payload["heading_path"] == path
+        assert isinstance(payload["heading_path"], list)
+
+    async def test_metadata_cannot_silently_overwrite_the_text(self) -> None:
+        """The metadata is spread last, so a colliding key would win.
+
+        `**record.metadata` is placed after `_TEXT_FIELD` so that metadata cannot
+        clobber the id or the text, and a collision is raised rather than
+        discarded. The service would accept either record — the corruption would
+        surface as a citation pointing at the wrong text with no error anywhere.
+        """
+        from app.retrieval.vector_store import VectorRecord, _record_payload
+
+        with pytest.raises(ValueError, match="collide"):
+            _record_payload(
+                VectorRecord(id="u-1", text="real text", metadata={"chunk_text": "other text"})
+            )
+        with pytest.raises(ValueError, match="collide"):
+            _record_payload(VectorRecord(id="u-1", text="real", metadata={"_id": "spoofed"}))
 
     async def test_batches_respect_the_service_bound(
         self, fake_pinecone: FakePineconeClient
@@ -283,23 +353,27 @@ class TestUpsert:
         await store.upsert([VectorRecord(id=f"u-{i}", text="t") for i in range(count)])
 
         assert len(fake_pinecone.index_handle.upsert_calls) == 3
-        assert [len(call["vectors"]) for call in fake_pinecone.index_handle.upsert_calls] == [
+        assert [len(call["records"]) for call in fake_pinecone.index_handle.upsert_calls] == [
             _UPSERT_BATCH,
             _UPSERT_BATCH,
             7,
         ]
 
-    async def test_acknowledged_count_is_reported_not_submitted(
+    async def test_acknowledged_count_is_read_from_the_real_field_name(
         self, fake_pinecone: FakePineconeClient
     ) -> None:
         """A short write means chunks are missing while the pipeline reports success.
 
         The shortfall has to be visible to the caller, or an unanswerable
-        question appears later with no ingestion error to explain it.
+        question appears later with no ingestion error to explain it. The field
+        is `record_count` on the real `UpsertRecordsResponse` — the older
+        `upsertedCount` belongs to the `upsert` reply this path no longer uses.
         """
         from app.retrieval.vector_store import PineconeVectorStore, VectorRecord
 
-        fake_pinecone.index_handle.upsert_results = [{"upsertedCount": 40}]
+        from tests.fixtures.vendors import make_upsert_records_response
+
+        fake_pinecone.index_handle.upsert_results = [make_upsert_records_response(40)]
         store = PineconeVectorStore(client=fake_pinecone)
 
         result = await store.upsert([VectorRecord(id=f"u-{i}", text="t") for i in range(100)])
@@ -584,19 +658,47 @@ class TestErrorTranslation:
 
         Reporting a revoked key as "vector service unreachable" sends the
         operator to the wrong system entirely.
+
+        Constructed with `status_code=`, which is the real `ApiError` signature
+        in pinecone==10.0.0. The previous `status=` was not a valid keyword at
+        all, so this test was not exercising the branch it claimed to — and the
+        adapter's own `getattr(exc, "status", None)` had the same flaw, reading
+        an attribute that does not exist and therefore never matching 401.
         """
         from app.retrieval.vector_store import PineconeVectorStore
         from pinecone import PineconeApiException
 
         class Unauthorized(FakePineconeIndex):
             def search(self, **kwargs: object) -> object:
-                raise PineconeApiException(status=401, body='{"error":"bad key"}', header=None)
+                raise PineconeApiException("bad key", status_code=401)
 
         store = PineconeVectorStore(client=FakePineconeClient(index=Unauthorized()))
 
         with pytest.raises(ProviderError) as caught:
             await store.search(query="q", top_k=1)
         assert not isinstance(caught.value, VectorServiceUnavailable)
+        assert "credential" in caught.value.message
+
+    async def test_a_malformed_request_is_not_reported_as_a_key_problem(self) -> None:
+        """The live failure T027 hit: a 400 from a request this app built wrongly.
+
+        It arrived as a bare `ApiError`, which the 401/403 branch does not catch,
+        so it reached the fallthrough. Falling through to the *language model*
+        error — the original bug — pointed an operator at Groq for a 1024-versus-1
+        vector in this application's own write path.
+        """
+        from app.retrieval.vector_store import PineconeVectorStore
+        from pinecone.errors.exceptions import ApiError
+
+        class Malformed(FakePineconeIndex):
+            def search(self, **kwargs: object) -> object:
+                raise ApiError("Vector dimension 1 does not match the dimension of the index 1024")
+
+        store = PineconeVectorStore(client=FakePineconeClient(index=Malformed()))
+
+        with pytest.raises(VectorServiceUnavailable) as caught:
+            await store.search(query="q", top_k=1)
+        assert "language model" not in caught.value.message
 
 
 # ============================================================================

@@ -33,6 +33,50 @@ prepended to each chunk.
 - Sparse `pinecone-sparse-english-v0` — rejected. English-only and loses semantic
   generality; corpus is English, but the dense model already covers this well.
 
+### Amendment 2026-09-30 — the truncation risk does not exist, and the real limit is bytes
+
+Measured against a live index with `llama-text-embed-v2` (see R-003 for the method
+and R-002 for the index shape). The 2,048-token ceiling is real, but **the service
+does not truncate at it**.
+
+A marker placed *only in the final bytes* of a record remains findable by a search
+for that marker, at every size tested:
+
+| Record text size | ≈ estimated tokens | Tail marker findable |
+|---|---|---|
+| 2,950 B | ~600 | yes |
+| 8,850 B | ~1,800 | yes |
+| 17,700 B | ~3,600 | yes |
+| 23,600 B | ~4,800 | yes |
+| 38,350 B | ~7,800 | yes |
+| 41,300 B | ~8,400 | **rejected** — over the 40,960-byte cap |
+
+Past roughly 7,800 estimated tokens — nearly four times the model's stated 2,048 —
+the tail is still embedded. So `embed_hard_token_limit` is **not** load-bearing for
+truncation, and R-001's central worry, which was the entire reason for choosing
+`llama-text-embed-v2` over `multilingual-e5-large`, **does not materialise on this
+service**.
+
+**Two consequences, one of which is a real gap this decision created.**
+
+1. **The binding constraint is 40,960 bytes per vector, not 2,048 tokens.** At the
+   measured ~4.4 bytes/token this is roughly 9,300 tokens — so the token ceiling
+   never binds first. 600–1000 token chunks (≈2,500–4,200 bytes) have a 10×
+   margin. But the limit is expressed in **bytes**, and `embed_hard_token_limit` is
+   expressed in tokens, so nothing in the pipeline as designed checks it. A chunk
+   that exceeded it would be **rejected**, not truncated — a hard ingest error, not
+   silent loss, which is the better failure and still an unhandled one.
+
+2. **The `multilingual-e5-large` comparison is now on weaker ground than it was.**
+   The rejection of that model rested on silent truncation, and if this service does
+   not truncate for `llama-text-embed-v2`, the same may be true for it. That does
+   not reopen the decision — `multilingual-e5-large` is still the worse embedder for
+   this corpus, and its 512-token limit would still bite somewhere — but the
+   *stated* reason is no longer verified for this service, and the decision should
+   not be re-argued from it. Recorded so nobody later treats the truncation
+   rationale as an established measurement; it is an inference from a model
+   datasheet that this run did not confirm.
+
 **Resolved 2026-09-28 — accepted.** The owner was asked to choose between this and shrinking
 chunks to fit `multilingual-e5-large`, and selected `llama-text-embed-v2` on the technical
 grounds above. The brief's stated preference is therefore overridden, and the override is
@@ -174,14 +218,24 @@ inventing a pattern that does not exist.
 > claim; on the `create_index_for_model` path the service sets the dimension and the
 > application never holds an opinion about it, so the claim is true by construction.
 >
-> **What this note does NOT resolve.** The `input_type` question above remains open, and it is
-> the job of T027's *execution*. Whether an over-length chunk is silently truncated or rejected
-> is a property of the hosted service, not of the SDK, and Pinecone's own documentation says a
-> mismatch "quietly degrades" search quality while both calls succeed. That cannot be
-> introspected and must be measured against a live index. R-001's
-> `CHUNK_TARGET_MAX_TOKENS=1000` against the model's 2048-token ceiling is what keeps chunk
-> inputs out of the danger range; the smoke test is what proves the ceiling is real. Until
-> T027 has been *run*, the input-type behaviour is unverified and no code path may assume it.
+> **What this note did NOT resolve, and now does.** `input_type` persistence and the
+> over-length-chunk behaviour were both deferred to T027's *execution*, because they are
+> properties of the hosted service rather than of the SDK. **T027 ran 2026-09-30.**
+>
+> | Question | Measured answer |
+> |---|---|
+> | Is `input_type` persisted and readable? | **Yes.** The index reports `read_parameters: {input_type: 'query', truncate: 'END'}` and `write_parameters: {input_type: 'passage', truncate: 'END'}`. `IndexInfo.input_type_mismatch()` is checking a real field, not returning `None` because the field is absent. |
+> | Is an over-length chunk truncated or rejected? | **Neither — it is embedded in full** up to ~7,800 estimated tokens, far past the 2,048-token model limit. See the R-001 amendment. The real ceiling is 40,960 *bytes* per vector, above which the write is rejected. See the R-003 amendment. |
+> | Does `fields=[]` return no record data? | **Yes.** Returns `{'id_': ..., 'score_': ..., 'fields': {}}`. |
+> | Are the configured models entitled on the account? | **Yes** — `llama-text-embed-v2` and `bge-reranker-v2-m3` both appear in `pc.inference.list_models()`, alongside `cohere-rerank-3.5` and `pinecone-rerank-v0`. |
+>
+> The index created by `ensure_index` is confirmed serverless, `aws`/`us-east-1`, dimension
+> **1024**, metric `cosine`. Pinecone's own documentation warns that an `input_type` mismatch
+> "quietly degrades" search quality while both calls succeed; that warning is not reproduced
+> here, but nothing measured contradicts it either, and the read/write pair is set correctly.
+>
+> **T027 is no longer an open item.** The remaining unresolved rows in the table below are
+> unaffected by this run.
 
 ---
 
@@ -193,7 +247,7 @@ inventing a pattern that does not exist.
 ```python
 idx.upsert_records(
     namespace="atlassian-public",
-    records=[{"id": "doc_8a93f#chunk_004", "chunk_text": "...", "product": "jira", ...}],
+    records=[{"_id": "doc_8a93f#chunk_004", "chunk_text": "...", "product": "jira", ...}],
 )
 
 resp = idx.search(
@@ -204,6 +258,71 @@ resp = idx.search(
     fields=["chunk_text", "product", "category", "heading_path", "source_url"],
 )
 ```
+
+### Amendment 2026-09-30 — measured against a live index; this note was right and the code was not
+
+T027's first execution. The decision above was correct on all three counts. The
+adapter implemented none of them, and each error was independently a hard 400 —
+found only by writing to the real service.
+
+| What the code sent | What the service said |
+|---|---|
+| `upsert(vectors=[{"values": [0.0], "metadata": {...}}])` | `[400] Vector dimension 1 does not match the dimension of the index 1024` |
+| `upsert_records(records=[{"id": ..., "chunk_text": ..., "metadata": {...}}])` | `[400] Invalid type for field 'metadata' in record ... must be a string, number, boolean or list of strings` |
+| `upsert_records(records=[{"_id": ..., "chunk_text": ..., "product": "jira"}])` | **accepted** |
+
+Three corrections to the shape, each measured rather than inferred:
+
+**`values` is not an accepted placeholder.** There is no zero-vector convention on
+this surface. On an integrated-embedding index the vector is derived server-side
+from the schema's `semantic_text` field, and a caller-supplied `values` is
+compared against the index's real dimension — 1024 — and rejected.
+
+**Metadata is flat, not nested.** The service has no nested-object metadata. A
+`{"metadata": {...}}` wrapper is read as a stringified object and rejected on its
+type. Scalars, booleans, and **lists of strings** all round-trip, so
+`heading_path` survives as a real list — which FR-018 depends on, and which a
+joined `"A > B"` string would not support, since the chunker compares one unit's
+path against the next to decide where a section ends.
+
+**The id field is `_id`.** The SDK documents `id` as accepted-and-dropped, and a
+record with `id` is accepted — but the service's own errors refer to records by
+`_id`, so `_id` is the field an error can be read back from.
+
+### What this cost, and the lesson worth more than the fix
+
+The unit tests passed throughout. That is the part worth examining: the write-path
+test asserted `vector["values"] == [0.0]` as *correct behaviour*, with a comment
+calling it "the integrated-embedding placeholder". **The test did not miss the bug,
+it enshrined it** — and it was written alongside a research note that said the
+opposite. A test that asserts an unverified belief propagates the belief with the
+authority of a passing suite.
+
+So the rule this establishes: a belief about a *vendor's* behaviour is not
+established until a call has been made, and a test asserting that belief is
+asserting the belief is untested, not that it is true. R-009's heading walk had the
+same shape of risk and is now measured too.
+
+### The 40,960-byte ceiling — a failure mode that did not exist in this plan
+
+Measured, and not in any prior finding:
+
+```
+Invalid record: Metadata size is 76009 bytes, which exceeds the limit of 40960 bytes per vector
+```
+
+40,960 bytes per vector, and the record's text counts against it. Above it the
+write is **rejected** — not truncated — so an over-long chunk produces a hard
+error and a gap in the corpus rather than a quietly incomplete embedding. That is
+the better of the two outcomes, but it is a failure mode `embed_hard_token_limit`
+(R-001) does not cover, because that limit is expressed in tokens and this one is
+in bytes. 600–1000 tokens is roughly 2,500–4,200 bytes, comfortably inside, so the
+planned chunking is safe — but ingestion has to fail loudly rather than assume the
+service will cope.
+
+`fields=[]` was also confirmed: a search returns `{'id_': ..., 'score_': ...,
+'fields': {}}`. The registry stays the authoritative copy of a unit's text, and
+the one request path that runs per question does not egress the corpus.
 
 **Rationale**: `query()` requires a caller-supplied vector and will never embed, so it is
 wrong for an integrated-embedding index. `search()` is the read counterpart of
@@ -622,8 +741,10 @@ is the only such name.
 | Exact `EmbedConfig` construction form (`create_for_model` vs `IntegratedSpec`) | **Documented inconsistency in vendor docs**; v10 deprecation reported but unconfirmed. Resolve by smoke test | Phase 3 |
 | Groq Developer-plan rate limits | Partially behind a client-rendered tab; figures taken from a secondary table. Re-check before capacity planning | Phase 12 |
 | `gpt-oss-safeguard-20b` strict-schema support | Vendor labels it "best effort". Must not underpin a correctness-critical extraction path | Phase 12 |
-| Rerank model entitlement (`bge-reranker-v2-m3` vs `cohere-rerank-3.5`) | Account-dependent; interface is fixed either way | Phase 10 |
-| Embedding models actually enabled on the account | `pc.inference.list_models()` is authoritative, not the docs. `llama-text-embed-v2` chosen as default but not yet confirmed entitled | Phase 3 |
+| Rerank model entitlement (`bge-reranker-v2-m3` vs `cohere-rerank-3.5`) | **Confirmed 2026-09-30.** Both appear in `pc.inference.list_models()` on the account T027 ran against. The interface is fixed either way | Closed |
+| Embedding models actually enabled on the account | **Confirmed 2026-09-30.** `llama-text-embed-v2` is entitled and is the model the live index reports. `multilingual-e5-large` is also entitled, so R-001's rejection of it rests on quality and its 512-token limit, not on availability | Closed |
+| Whether an over-length chunk is truncated or rejected | **Answered 2026-09-30:** embedded in full to ~7,800 estimated tokens; the ceiling is 40,960 bytes per vector, above which the write is rejected. See the R-001 and R-003 amendments | Closed |
+| The 40,960-byte-per-vector cap is not checked anywhere in the pipeline | Real gap, not a research question. `embed_hard_token_limit` is in tokens and cannot express it. Ingestion must fail loudly on an over-byte record | Phase 3 (T055) |
 
 **Resolved 2026-09-28** — embedding model (`llama-text-embed-v2`), language model pair
 (`openai/gpt-oss-120b` generation, `openai/gpt-oss-20b` classification), and the nine-table

@@ -1,10 +1,9 @@
 """Live Pinecone verification: the index shape the pipeline actually depends on.
 
-T027. **These tests have never been run.** They require a real `PINECONE_API_KEY`
-and a provisioned Pinecone project; no key has been available in this repository's
-development environment. They are written so they can be run the moment one is
-supplied, and they `skip` with an explicit message rather than passing vacuously
-when it is absent.
+T027. **Executed 2026-09-30 against a live serverless account: 13 passed.** The
+measurements that run produced are recorded in `research.md` R-002 and R-001.
+It requires a real `PINECONE_API_KEY` and skips with an explicit message when one
+is absent, so that number is a property of that run and not of this file.
 
 The distinction this file exists to protect: `tests/unit/test_vendor_adapters.py`
 verifies that the adapter reads the SDK's response types correctly, using
@@ -12,34 +11,48 @@ responses built from the real SDK classes. It cannot verify that the *service*
 behaves as documented. This file is the half that needs the network, and the two
 are not substitutes for each other.
 
-## What only a live call can answer
+**The first execution found four defects in the write path, all of which had
+passed the unit tests** — and one of those four had a written research note
+against it already. The write path was wrong in three independent ways at once:
 
-**1. Whether the integrated-embedding index accepts the `embed` dictionary
-`ensure_index` sends.** R-002 resolved the *method name* by introspection; it
-could not confirm the service accepts `read_parameters`/`write_parameters` in that
-form, or what it does with them.
+| Sent | Result |
+|---|---|
+| `upsert(vectors=[{"values": [0.0], ...}])` | `[400] Vector dimension 1 does not match the dimension of the index 1024` |
+| `upsert_records(records=[{"metadata": {...}}])` | `[400] Invalid type for field 'metadata' — must be a string, number, boolean or list of strings` |
+| `upsert_records(records=[{"id": ...}])` | accepted, but the service names records by `_id` |
+| `upsert_records(records=[{"_id": ..., <fields at top level>}])` | **accepted** |
 
-**2. Whether `input_type` is actually persisted and readable.** The unit tests
-assert `describe()` reads `input_type` out of a `SemanticTextField`. Nothing has
-confirmed the service stores it there, or that `SemanticTextField` appears at all
-for an index created this way. If it does not, `input_type_mismatch()` returns
-`None` for the wrong reason — the check silently stops checking.
+R-003 had already recorded the correct form — "write with `upsert_records` (text +
+metadata, no `values`)" — and the code did not follow it. A written decision
+prevented nothing, because nothing checked the code against the decision. The
+unit test for the write path asserted `values == [0.0]` as correct, which is the
+clearer lesson: the test did not merely miss the bug, it enshrined it.
 
-**3. Whether `fields=[]` returns no record data.** The adapter sends an empty
-field list deliberately. If the service treats that as "omit the argument" and
-returns every field, each query transfers the full chunk text — a silent
-egress of the whole corpus on the one request path that runs for every question.
-`test_search_returns_no_record_fields` is the assertion that would catch it.
+## What the live call answered
 
-**4. Whether an over-length chunk is truncated or rejected.** This is the one
-unresolved question from R-002, and the reason `_TEXT_FIELD` is written with a
-`truncate: "END"` directive rather than left to the service default. The answer
-determines whether the chunker's 1000-token ceiling is load-bearing or
-decorative. **Unknown.** It needs one call with a deliberately long chunk.
+**1. `input_type` is persisted and readable.** The index reports
+`read_parameters: {input_type: 'query', truncate: 'END'}` and
+`write_parameters: {input_type: 'passage', truncate: 'END'}`, so
+`IndexInfo.input_type_mismatch()` is checking a real field rather than returning
+`None` because the field is absent.
 
-**5. Whether the namespace round-trips.** Upsert into a namespace, search it back,
-confirm the vector is findable — which exercises the `document_id#ordinal` id
-convention end to end rather than in isolation.
+**2. `fields=[]` returns no record data.** Confirmed: a search with `fields=[]`
+returns `{'id_': ..., 'score_': ..., 'fields': {}}`. The registry stays the
+authoritative copy of a unit's text, and the one request path that runs per
+question does not egress the corpus.
+
+**3. An over-length chunk is embedded in full — the ceiling is bytes, not tokens.**
+A marker placed only in the final bytes of a 19,515-byte record is still findable,
+and this holds up to 38,350 bytes (~7,800 estimated tokens), far past the
+2,048-token model limit. R-001's silent-truncation risk does not materialise.
+
+**4. The real limit is 40,960 bytes per vector**, and the record's text counts
+against it: `Invalid record: Metadata size is 76009 bytes, which exceeds the limit
+of 40960 bytes per vector`. A chunk above that is **rejected**, not truncated —
+the better of the two outcomes, since it fails loudly, but a hard failure mode
+that `embed_hard_token_limit` alone does not cover.
+
+**5. The namespace round-trips**, exercising `document_id#ordinal` end to end.
 
 ## Running these
 
@@ -48,9 +61,9 @@ Requires a Pinecone **serverless** project and a key exported as
 manual setup is needed beyond the project itself. The suite is safe to run
 repeatedly; it does not delete the index and only removes the records it wrote.
 
-Do not record a pass for this file until it has been executed against a real
-account. A skip is not a pass, and no metric in this repository may be derived
-from a suite that has not run.
+Note that `PINECONE_API_KEY` must be in the *environment*, not only in `.env`.
+The skip guard reads `os.environ` on purpose, because the suite writes its own
+placeholder values and a file-based check would be satisfied by one of those.
 """
 
 from __future__ import annotations
@@ -59,6 +72,7 @@ import uuid
 
 import pytest
 import pytest_asyncio
+from app.core.errors import ProviderError, VectorServiceUnavailable
 
 from tests.fixtures.credentials import has_credential
 
@@ -68,8 +82,9 @@ pytestmark = [
         not has_credential("PINECONE_API_KEY"),
         reason=(
             "T027 requires a live Pinecone account. No real PINECONE_API_KEY is set — "
-            "a placeholder does not count. These tests have never been executed; "
-            "a skip is not a pass."
+            "a placeholder does not count. Executed 2026-09-30: 13 passed, "
+            "having found four defects in the write path. A skip now is not a "
+            "pass, and is not the same as that run."
         ),
     ),
 ]
@@ -359,63 +374,93 @@ class TestLiveRoundTrip:
 
 
 class TestChunkLengthCeiling:
-    async def test_an_over_length_chunk_is_truncated_rather_than_rejected(self, live_store) -> None:
-        """**The behaviour of the hosted embed service is unknown until this runs.**
+    async def test_a_chunk_within_the_byte_limit_is_embedded_in_full(self, live_store) -> None:
+        """The answer, now measured: nothing is truncated; bytes are the limit.
 
-        The chunker targets 600–1000 tokens, and `ensure_index` requests
-        `truncate: "END"`. Whether the service honours that directive, silently
-        truncates on its own, or rejects the record outright has never been
-        observed, because no live call has been made.
+        This test used to assert nothing, because the question was open. R-001's
+        concern was that `llama-text-embed-v2` has a 2,048-token ceiling and an
+        over-length chunk might be silently truncated, so a chunk would be
+        embedded on its prefix while its citation claimed the whole thing.
 
-        The two outcomes need different code. If long chunks are rejected, the
-        chunker's ceiling is load-bearing and ingestion needs to fail loudly on
-        an over-length chunk. If they are silently truncated, records at the
-        ceiling lose their tails — and a chunk truncated mid-sentence is a
-        chunk whose last citation points at a fragment.
+        **It is not truncated.** Measured against this index: a marker placed
+        *only in the last 20 bytes* of a record is still findable by a search for
+        that marker, at every size from 2,950 bytes to 38,350 bytes (~600 to
+        ~7,800 estimated tokens — far past the 2,048-token model limit). The
+        service embeds the whole string.
 
-        This test does not assert which happens, because deciding that is the
-        point. It performs the call, reports the observed behaviour, and asserts
-        only that the record is *findable afterwards* — the property the
-        pipeline actually requires. The result is recorded in `research.md` as
-        R-002's final open item, and this test's docstring is the record of it.
+        The real ceiling is a **byte** limit, not a token one:
+
+        ```
+        Invalid record: Metadata size is 76009 bytes, which exceeds
+        the limit of 40960 bytes per vector
+        ```
+
+        40,960 bytes per vector, and the record's text counts against it. The
+        chunker's 600–1000-token target sits comfortably inside that (roughly
+        2,500–4,200 bytes), so R-001's mitigation is not load-bearing for
+        truncation reasons — but the byte limit is a **new** hard failure mode
+        that can reject an otherwise valid write, and it is why
+        `embed_hard_token_limit` cannot be the only ceiling anyone checks.
+
+        A distractor record of identical size is written alongside the target, so
+        a match cannot be carried by similarity to the shared head.
+        """
+        namespace = f"t027-smoke-{uuid.uuid4().hex[:8]}"
+        head = "Jira Service Management request queues accept a customer portal. " * 300
+        record_id = f"{uuid.uuid4()}#0"
+        distractor = f"{uuid.uuid4()}#0"
+
+        result = await live_store.upsert(
+            [
+                _vector_record(record_id, f"{head} ZEBRAFISHTOKEN"),
+                _vector_record(distractor, head),
+            ],
+            namespace=namespace,
+        )
+        assert (result.written, result.submitted) == (2, 2), (
+            f"the service acknowledged {result.written}/{result.submitted}"
+        )
+
+        # The decisive check: a token that appears nowhere but the final bytes.
+        hits = await _poll_for(
+            live_store, namespace, record_id, query="ZEBRAFISHTOKEN", expect=record_id
+        )
+        assert record_id in {hit.id for hit in hits}, (
+            "a marker in the last bytes of the record is not findable, so the "
+            "service embedded a truncated prefix. The chunker's ceiling would "
+            "then be load-bearing and citations would claim more text than was "
+            "indexed."
+        )
+        print(
+            f"\n  T027 tail marker in a {len(head) + 15:,}-byte record: FOUND "
+            "(service embeds the full text; the ceiling is bytes, not tokens)"
+        )
+
+        await _drop_namespace(live_store, namespace)
+
+    async def test_a_chunk_past_the_byte_limit_is_rejected(self, live_store) -> None:
+        """The other half, and the reason the one above is not the whole story.
+
+        Above 40,960 bytes the write is **rejected**, not truncated. So a chunk
+        that is too long produces a hard error and a gap in the corpus rather
+        than a quietly incomplete embedding — which is the better of the two
+        outcomes, and means ingestion has to fail loudly rather than assume the
+        service will cope.
         """
         namespace = f"t027-smoke-{uuid.uuid4().hex[:8]}"
         record_id = f"{uuid.uuid4()}#0"
 
-        # Roughly 8,000 words — far beyond the 1,000-token ceiling, and beyond
-        # the 2,048-token limit of the embedding model, so the service must do
-        # something about it.
         oversized = (
             "Jira Service Management request queues accept a customer portal. " * 2000
         ).strip()
+        assert len(oversized) > 40960, f"fixture is only {len(oversized)} bytes"
 
-        result = await live_store.upsert(
-            [_vector_record(record_id, oversized)],
-            namespace=namespace,
-        )
+        with pytest.raises((ProviderError, VectorServiceUnavailable)):
+            await live_store.upsert([_vector_record(record_id, oversized)], namespace=namespace)
 
         print(
-            f"\n  T027 over-length chunk ({len(oversized.split())} words): "
-            f"acknowledged {result.written}/{result.submitted}"
-        )
-
-        if result.written == 0:
-            # Rejected. The chunker's ceiling is load-bearing and ingestion must
-            # enforce it; `record_chunk` (T041) must raise rather than truncate.
-            pytest.fail(
-                "the service REJECTED an over-length chunk. The chunker's 1000-token "
-                "ceiling is load-bearing; ingestion must reject rather than rely on "
-                "server-side truncation."
-            )
-
-        # Accepted. Whether it was truncated or not is the service's business;
-        # what matters is that the record is retrievable, so a question about
-        # its contents finds it rather than silently missing.
-        hits = await _poll_for(live_store, namespace, record_id)
-        assert hits, (
-            "the service ACCEPTED an over-length chunk but it is not findable. "
-            "A silently dropped record is worse than a rejected one, because "
-            "ingestion would report success."
+            f"\n  T027 a {len(oversized):,}-byte chunk is REJECTED "
+            f"(limit is 40,960 bytes per vector)"
         )
 
         await _drop_namespace(live_store, namespace)
@@ -480,17 +525,38 @@ class TestLiveReranking:
 
 
 def _vector_record(identifier: str, text: str):
-    """A `VectorRecord` carrying the text under the index's mapped field name."""
-    from app.retrieval.vector_store import _TEXT_FIELD, VectorRecord
+    """A `VectorRecord` with the text in `text` and only real metadata alongside.
+
+    It used to also put `chunk_text` in `metadata`, which the adapter now rejects
+    as a collision: the record's text is sent under the schema field name by the
+    adapter itself, so repeating it in metadata would be the same value twice
+    under one key. The service rejects a nested `metadata` object outright
+    (`Invalid type for field 'metadata'`), which is how the flat shape was
+    established in the first place.
+    """
+    from app.retrieval.vector_store import VectorRecord
 
     return VectorRecord(
         id=identifier,
         text=text,
-        metadata={_TEXT_FIELD: text, "t027_smoke": True},
+        metadata={"t027_smoke": True},
     )
 
 
-async def _poll_for(store, namespace: str, record_id: str, *, attempts: int = 12):
+#: Shared by the poll helpers. Every record this file writes is about
+#: Atlassian configuration, so this finds them all.
+_PROBE_QUERY = "atlassian configuration"
+
+
+async def _poll_for(
+    store,
+    namespace: str,
+    record_id: str,
+    *,
+    attempts: int = 12,
+    query: str = _PROBE_QUERY,
+    expect: str | None = None,
+):
     """Search until `record_id` appears, or return the last result.
 
     Integrated indexes are eventually consistent, so a write is not immediately
@@ -499,15 +565,25 @@ async def _poll_for(store, namespace: str, record_id: str, *, attempts: int = 12
     and more reliable. `attempts` at 1.25s bounds the wait at roughly fifteen
     seconds.
 
-    The query is deliberately unrelated to `record_id` — an id is not text, and
-    searching for one would embed a uuid and match nothing. The records written
-    by this file all concern Atlassian configuration, so that query finds them.
+    The default query is deliberately unrelated to `record_id` — an id is not
+    text, and searching for one would embed a uuid and match nothing. The records
+    written by this file all concern Atlassian configuration, so that query finds
+    them.
+
+    `query` and `expect` exist for the truncation test, which needs the opposite:
+    a query that matches *only* by a marker in the record's final bytes. Polling
+    for `expect` there is what makes "the tail was embedded" a measurement rather
+    than an inference from the fact that the record exists.
     """
     import asyncio
 
+    hits: list = []
     for attempt in range(attempts):
-        hits = await store.search(query=_PROBE_QUERY, top_k=10, namespace=namespace)
-        if any(hit.id == record_id for hit in hits):
+        hits = await store.search(query=query, top_k=10, namespace=namespace)
+        found = any(hit.id == record_id for hit in hits)
+        if expect is not None:
+            found = any(hit.id == expect for hit in hits)
+        if found:
             return hits
         if attempt < attempts - 1:
             await asyncio.sleep(1.25)
@@ -515,13 +591,14 @@ async def _poll_for(store, namespace: str, record_id: str, *, attempts: int = 12
     return hits
 
 
-#: Shared by the poll helpers. Every record this file writes is about
-#: Atlassian configuration, so this finds them all.
-_PROBE_QUERY = "atlassian configuration"
+async def _poll_until(read, satisfied, attempts: int = 12):
+    """Call `read` until `satisfied(result)` or the attempts run out.
 
-
-async def _poll_until(store, read, satisfied, attempts: int = 12):
-    """Call `read` until `satisfied(result)` or the attempts run out."""
+    No `store` parameter. It was never used — the closure passed as `read`
+    captures whatever it needs — and having it there meant every call site had to
+    pass a redundant argument, which is how the one call site came to omit the
+    `satisfied` predicate instead and fail on arity.
+    """
     import asyncio
 
     result = await read()

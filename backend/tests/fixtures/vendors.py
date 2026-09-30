@@ -83,6 +83,23 @@ def make_empty_search_response() -> Any:
     return make_search_response([])
 
 
+def make_upsert_records_response(record_count: int) -> Any:
+    """Build a real `UpsertRecordsResponse`.
+
+    T027 confirmed the field is `record_count`, measured against a live index:
+    `upsert_records(...)` returns
+    `UpsertRecordsResponse(record_count=1, response_info=ResponseInfo(...))`.
+
+    Not a dict shaped like the old `upsert` reply. If this returned
+    `{"upsertedCount": n}` the adapter's acknowledgement parsing would be tested
+    against a response the service never sends, and a change to how the service
+    renames a field would pass here and fail in production.
+    """
+    from pinecone.models.vectors.responses import UpsertRecordsResponse
+
+    return UpsertRecordsResponse(record_count=record_count)
+
+
 def make_rerank_result(
     pairs: list[tuple[int, float]],
     *,
@@ -214,10 +231,35 @@ class FakePineconeIndex:
             return make_empty_search_response()
         return self.search_response
 
-    def upsert(self, **kwargs: Any) -> Any:
+    def upsert_records(self, **kwargs: Any) -> Any:
+        """The write path T027 verified against a live index.
+
+        `upsert_records` and `upsert` are not interchangeable. `upsert` needs
+        caller-supplied `values`, and on an integrated-embedding index sending
+        `values=[0.0]` is rejected with
+
+            [400] Vector dimension 1 does not match the dimension of the index 1024
+
+        The real `UpsertRecordsResponse` carries a `record_count`; returning a
+        dict shaped like the old `upsert` reply would let the adapter's
+        acknowledgement parsing be tested against a response the service never
+        sends.
+        """
         self.upsert_calls.append(kwargs)
         if self.upsert_results:
             return self.upsert_results.pop(0)
+        return make_upsert_records_response(len(kwargs.get("records", [])))
+
+    def upsert(self, **kwargs: Any) -> Any:
+        """Retained so the adapter calling the *wrong* method fails loudly.
+
+        T027 found the adapter using `upsert` with a zero-vector placeholder,
+        which R-003 had already ruled out. This method exists so a regression
+        reaches a test instead of a 400 from the service: any call lands in
+        `upsert_calls` with a `vectors` key, which
+        `test_upsert_sends_no_vectors` asserts never happens.
+        """
+        self.upsert_calls.append(kwargs)
         return {"upsertedCount": len(kwargs.get("vectors", []))}
 
     def delete(self, **kwargs: Any) -> Any:
