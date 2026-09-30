@@ -396,6 +396,69 @@ re-emitted as separate blocks.
   double-counts. Separator-aware text extraction is required rather than bare `itertext()`.
 - `load_html()` rejects single-block fragments; wrap partial HTML in `<div>…</div>`.
 
+### Amendment 2026-09-30 — measured against real pages from the manifest
+
+R-009 above was written from fixtures. Running the walk against live
+`support.atlassian.com`, `confluence.atlassian.com` and `developer.atlassian.com`
+pages produced four findings the fixtures could not have shown. All four are
+recorded because each one changes code, and two of them are invisible in output.
+
+**1. The walk is correct; the pages are shallower than assumed.** Measured across
+14 real Jira documentation pages, the heading depth inside `<main>` is:
+
+| Deepest level | Pages |
+|---|---|
+| 2 | 9 of 14 |
+| 3 | 4 of 14 |
+| 4 | 1 of 14 |
+
+Nothing deeper than level 4 anywhere in the sample, and most pages are
+`h1` + a flat run of `h2`. On `reopen-a-sprint` the walk recovers
+`Reopen a sprint > Scenarios for reopening sprints > Simple scenarios` and
+truncates correctly to `… > Complex scenarios` on the sibling — which is the
+behaviour the whole note exists to specify, working on a real page. A system
+expecting deep nesting everywhere would be waiting for structure these pages do
+not have; the walk handles depth 1 and depth 4 identically.
+
+**2. `h1` text is frequently repeated as the first `h2`.** Measured on
+`access-a-project`: `<h1>Access a space</h1>` then `<h2>Access a space</h2>`.
+Carried literally, every unit beneath gets `["Access a space", "Access a
+space"]` — a path that reads as a section nested inside itself and names no real
+location. `_push_heading` skips a level whose text repeats its parent. This is
+*not* heading de-duplication: it applies only across differing levels, so two
+distinct `h2` sections sharing a name are unaffected, and the level structure the
+stack depends on is preserved.
+
+**3. Two of six manifest start_urls are landing pages, not articles.**
+`create-and-organize-work-in-confluence-cloud` and `developer.atlassian.com/cloud/jira/platform`
+have 2 and 6 raw `<hN>` elements respectively and yield **zero** headings after
+extraction — verified that the content *is* server-rendered (13,048 and 3,846
+words in the raw HTML, no empty-container shell signature), so trafilatura is
+selecting correctly and these are genuinely one-`h1` landing pages. `favor_recall`
+and `favor_precision` produce byte-identical output on both, so no option fixes
+this because nothing is broken. **Consequence for the manifest**: six sources at
+one URL each is not enough to produce a corpus with `h2`+ structure, and T017's
+topic expectations assume a hierarchy these six pages largely do not have. The
+crawl scope rule (host + containing directory) is what must widen the corpus,
+not the extractor.
+
+**4. trafilatura drops all heading structure on short pages — measured threshold
+≈ 3 sentences.** Below it, a page with `<h1>` and `<h2>` returns **one
+concatenated `<p>`** with the headings flattened *into the prose as text*, not
+omitted. This is a different behaviour from "this page has no headings" and
+must not be read as one; a pipeline that trusted it would index the boilerplate
+and a site's own navigation under `heading_path == []`. This is the concrete
+case T051's "main content too small" rejection (FR-029) exists to exclude, and
+`test_a_page_too_short_for_extraction_yields_no_heading_path` pins it.
+
+**Not fixed here, and deliberately.** Real pages also yield interactive
+boilerplate as content blocks — `"Was this helpful?"` and `"Rate this page:"`
+both arrive as ordinary `<p>` units and are currently treated as indexable
+content. That is *block-level* filtering, which is a different job from T051's
+*page-level* rejection ("main content is too small or too boilerplate-heavy",
+FR-029), and it belongs there rather than being pre-empted here. Recorded so it
+is a decision to make at T051 and not a surprise at the Phase 3 checkpoint.
+
 ---
 
 ## R-010: HTML parser choice — lxml, and it is free

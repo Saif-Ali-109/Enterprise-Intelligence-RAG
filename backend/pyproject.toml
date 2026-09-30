@@ -79,6 +79,29 @@ disallow_untyped_decorators = false
 warn_return_any = false
 warn_unused_ignores = false
 
+[[tool.mypy.overrides]]
+# ---------------------------------------------------------------------------
+# `lxml`, which ships no type information at all.
+# ---------------------------------------------------------------------------
+# Not a vendor adapter and not an exemption: `app.ingestion.extractor` is core
+# pipeline code and stays under `strict`. What is missing is stub coverage for
+# the library, not discipline in the module. `lxml-stubs` is not added as a
+# runtime dependency for one annotation — it is a typing-only package, and
+# adding it to `requirements.txt` would put a build-time concern in the
+# production image.
+#
+# Narrower than a global `ignore_missing_imports`, which would silence the same
+# error in every module that will import lxml, and would do it silently: the next
+# untyped import added anywhere in `app/` would pass unremarked. This entry names
+# the one module, so a second one has to be a decision rather than an oversight.
+module = ["app.ingestion.extractor"]
+# `import-untyped`, not `ignore_missing_imports`: lxml is *installed and
+# resolvable*, it simply ships no type information. The latter flag covers an
+# unresolvable import and does not apply here, so both are set to make the
+# intent explicit rather than to make the error go away.
+ignore_missing_imports = true
+disable_error_code = ["import-untyped"]
+
 [tool.coverage.run]
 source = ["app"]
 branch = true

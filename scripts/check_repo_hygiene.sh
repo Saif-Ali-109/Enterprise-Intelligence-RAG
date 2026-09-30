@@ -159,12 +159,19 @@ fi
 # A path that depends on where the repository happens to be cloned breaks every
 # other clone. The literal placeholder forms (`/home/<user>/`, `/Users/<name>/`)
 # are the rule text itself and are therefore excluded by construction.
+#
+# The Windows drive pattern requires a boundary before the letter. Without it
+# `[A-Za-z]:\\` matches the tail of any word ending in a capital letter followed
+# by a backslash — which is why `"CONTEXT:\n"` in a Python string was reported
+# as a path, since its final `T:\` is a valid drive-letter shape. A rule that
+# fires on ordinary code gets disabled, and a disabled rule protects nothing.
+# `(^|[^A-Za-z0-9_])` is the boundary; a genuine `C:\Users\...` has one.
 path_violations="$(
   tracked_files \
     | grep -vE '^scripts/check_repo_hygiene\.sh$' \
     | while IFS= read -r file; do
         [[ -f "$file" ]] || continue
-        grep -nE '(/home/[A-Za-z0-9._-]+/|/Users/[A-Za-z0-9._-]+/|[A-Za-z]:\\[^ ]|/mnt/[a-z]/)' "$file" 2>/dev/null \
+        grep -nE '(/home/[A-Za-z0-9._-]+/|/Users/[A-Za-z0-9._-]+/|(^|[^A-Za-z0-9_])[A-Za-z]:\\[^ ]|/mnt/[a-z]/)' "$file" 2>/dev/null \
           | grep -vE '(/home/<|/Users/<)' \
           | sed "s|^|  $file:|"
       done || true
