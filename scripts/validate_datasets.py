@@ -66,28 +66,47 @@ def _format_error(error: Any, *, indent: int = 0) -> list[str]:
 
     A bare "is not valid under any of the given schemas" is useless when the
     point is to tell someone which of their 30 questions broke which rule.
+
+    `error` is a `jsonschema.ValidationError`, so its fields are **attributes**,
+    not dict keys. An earlier version called `error.get("validator")` and crashed
+    with `AttributeError` on the first real violation -- which means this
+    function, the entire reason the validator is usable, had never run on a
+    failing document. Every schema violation since it was written produced a
+    traceback instead of a message. Found by planting a bad field and running the
+    gate, which is the only way it could have been found: the gate is only ever
+    run on data that is meant to be valid.
+
+    A plain dict is also accepted, so the function stays testable without the
+    `jsonschema` dependency installed.
     """
     pad = "  " * indent
     lines: list[str] = []
 
-    if error.get("validator") == "anyOf":
+    def field(name: str, default: Any = None) -> Any:
+        if isinstance(error, dict):
+            return error.get(name, default)
+        return getattr(error, name, default)
+
+    def children_of(node: Any) -> list[Any]:
+        raw = node.get("context") if isinstance(node, dict) else getattr(node, "context", None)
+        return list(raw or [])
+
+    if field("validator") in {"anyOf", "oneOf"}:
         # A closed schema with `oneOf`/`anyOf` branches reports every branch's
-        # failure at once, which buries the real cause. Report the branch with
-        # the fewest errors — that is the closest match.
-        contexts = error.get("context") or []
+        # failure at once, which buries the real cause. Report the branch with the
+        # fewest errors -- that is the closest match.
+        contexts = children_of(error)
         if contexts:
-            best = min(contexts, key=lambda ctx: len(ctx.get("context") or []))
+            best = min(contexts, key=lambda ctx: len(children_of(ctx)))
             return _format_error(best, indent=indent)
 
-    location = "/".join(str(part) for part in error.get("absolute_path", ())) or "(root)"
-    lines.append(f"{pad}{location}: {error.get('message', 'invalid')}")
+    location = "/".join(str(part) for part in (field("absolute_path") or ())) or "(root)"
+    lines.append(f"{pad}{location}: {field('message', 'invalid')}")
 
-    for child in error.get("context") or []:
+    for child in children_of(error):
         lines.extend(_format_error(child, indent=indent + 1))
 
     return lines
-
-
 def validate(target_name: str, data_path: Path, schema_name: str) -> list[str]:
     """Validate one file. Returns a list of human-readable failures (empty = pass)."""
     schema_path = CONTRACTS / schema_name

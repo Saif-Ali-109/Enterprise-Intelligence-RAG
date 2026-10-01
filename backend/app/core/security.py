@@ -454,17 +454,24 @@ def is_within_scope(url: str, *, start_url: str) -> bool:
 
     # Compare after percent-decoding, so `/docs%2Fadmin` cannot smuggle a
     # segment past the comparison and then be decoded into one.
+    #
+    # Indexed over `range(len(origin_segments))` rather than `zip`-ed. An earlier
+    # version used `zip(origin_segments, candidate_segments, strict=True)` on the
+    # reasoning that the guard above established "at least as many segments", so
+    # "the lengths already agree". That inference was false: `strict=True`
+    # requires *equal* lengths, and a candidate DEEPER than the scope prefix is
+    # the normal case, not an edge case — every article under `/docs/` is one
+    # segment deeper than `/docs/`. So `is_within_scope` raised `ValueError` on
+    # essentially every real URL instead of returning a verdict. It was latent
+    # because no test had yet exercised it (T045).
+    #
+    # Indexing keeps the guard load-bearing in the way the comment above wanted:
+    # if the length guard were removed or weakened, `candidate_segments[index]`
+    # raises `IndexError` rather than silently truncating the comparison and
+    # reporting a match.
     return all(
-        unquote(origin_segment) == unquote(candidate_segment)
-        # `strict=True` is safe because the guard above established that the
-        # candidate has at least as many segments as the origin, so the lengths
-        # already agree. It is also what makes the guard load-bearing: with the
-        # default, removing or weakening that guard would turn a bypass into a
-        # silent truncation — the comparison would stop at the shorter list and
-        # report a match. With `strict`, the same edit raises instead.
-        for origin_segment, candidate_segment in zip(
-            origin_segments, candidate_segments, strict=True
-        )
+        unquote(origin_segments[index]) == unquote(candidate_segments[index])
+        for index in range(len(origin_segments))
     )
 
 

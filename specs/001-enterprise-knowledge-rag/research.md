@@ -786,6 +786,100 @@ is the only such name.
 
 ---
 
+## R-015: Crawl frontier — link-following fails on 4 of 6 sources, sitemaps do not
+
+**Question.** How does a bounded crawl find the pages to ingest, given six
+registered `start_url`s?
+
+**The decision as first taken, and why it did not survive measurement.** The
+owner chose link-following within the existing host-plus-directory scope rule,
+because it needed no manifest change and kept the corpus auditable from six
+declared roots. That reasoning holds. The premise did not: it assumes the
+documentation pages link to their siblings, and **measured live on 2026-10-01,
+they do not.**
+
+| start_url | hrefs on page | in scope at depth 1 |
+|---|---|---|
+| `.../jira-software-cloud/docs/access-a-project/` | 667 | **1** - itself |
+| `.../jira-cloud-administration/docs/set-up-jira-products/` | 283 | **4**, of which 3 malformed |
+| `.../confluence-cloud/docs/create-and-organize-work-in-confluence-cloud/` | 484 | **1** - itself |
+| `.../jira-service-management-cloud/docs/what-are-issues-and-requests/` | 1235 | **4**, of which 3 malformed |
+| `developer.atlassian.com/cloud/jira/platform/` | 64 | **29** |
+| `developer.atlassian.com/cloud/jira/service-desk/` | 80 | **22** |
+
+The four `support.atlassian.com` sources render their documentation navigation
+**client-side**. 656 of the 667 hrefs on `access-a-project/` point at other
+products' directories; the list of sibling articles is not in the HTML at all.
+Link-following alone would have produced roughly 50-80 pages, essentially all REST
+API reference, unable to answer a single one of the 32 curated questions about
+Jira user configuration, Confluence, or JSM.
+
+The two `developer.atlassian.com` hosts are the opposite: their navigation *is*
+server-rendered. So **both mechanisms are kept and each is used where it was
+measured to work.**
+
+**What replaced it.** Every allowlisted host declares its sitemap in its own
+`robots.txt`. `support.atlassian.com/sitemap.xml` is a `sitemapindex` of 56
+sub-sitemaps, each ending `.xml` (not `sitemap.xml` - an early filter looked for
+that suffix, found zero children, and briefly suggested the host published no
+sub-sitemaps at all; the manifest's notes had it right and the filter was wrong).
+The four product sub-sitemaps list:
+
+| Sub-sitemap | `/docs/` pages |
+|---|---|
+| `jira-cloud.xml` | 645 |
+| `confluence-cloud.xml` | 456 |
+| `jira-cloud-administration.xml` | 258 |
+| `jira-service-management-cloud.xml` | 1190 |
+
+Using a site's own declared inventory is *more* compliant with its stated
+wishes, not less.
+
+**The rule that keeps it from being a loophole.** A sitemap is an **inventory,
+not an authorisation.** `support.atlassian.com/robots.txt` disallows
+`/contact/*`, and a sitemap may still list a disallowed URL. Every
+sitemap-derived URL therefore passes the **same** robots gate as a link-derived
+one, and is still held to the source's crawl scope. There is deliberately no
+second authorisation path: if a sitemap could grant access that a link could
+not, "does the site allow this?" would become a property of where a URL was
+discovered rather than of the URL itself.
+
+**Two things measured on the way, both now handled and both tested:**
+
+- **Malformed hrefs resolve to plausible wrong URLs.** The live pages emit
+  literally escaped backslashes:
+  `.../what-are-issues-and-requests/\/\/confluence.atlassian.com\/servicedeskcloud/...`.
+  `urljoin` does not reject these - it resolves them to a *wrong* URL under the
+  start page's own path, which is worse than dropping them, because the wrong URL
+  passes every later check and gets crawled. A raw backslash is therefore
+  rejected; `%5C` (a backslash the publisher meant) is still accepted.
+- **`scope_prefix` is wrong for a start_url that is a section index.** It drops
+  the leaf segment, which is correct for an article (`/docs/access-a-project/`
+  becomes `/docs/`) but too broad for an index: `/cloud/jira/platform/` would
+  scope to `/cloud/jira/` and silently pull in sibling sections such as
+  `/cloud/jira/software/`. The derived rule stays the default; a source that is
+  an index declares `scope_prefix` explicitly.
+
+**Determinism.** The frontier is **sorted before the page cap is applied.** A cap
+applied to an unordered set keeps a different subset on each run, so `max_pages`
+would mean something different every time - which breaks SC-012 (re-crawling an
+unchanged source adds zero duplicate content) for reasons having nothing to do
+with content change.
+
+**Result, measured.** A run over the six real sitemaps queues **154 pages**,
+inside the 100-200 page corpus target SC-011 now states, across all five product
+domains: 49 developer-platform, 40 `jira-software-cloud`, 25
+`jira-cloud-administration`, 20 `confluence-cloud`, 20
+`jira-service-management-cloud`. Refusals are counted, never silent: 133
+out-of-scope, 9 malformed, 2,626 duplicates (expected - every in-scope link on a
+support article is already a sitemap entry).
+
+**Not yet measured.** That run passed a permissive robots gate, because the real
+one is T049. The robots enforcement path is therefore untested against live
+directives; what *is* tested is that sitemap and link URLs take the *same* gate.
+
+---
+
 ## Unresolved — carried into implementation, not deferred silently
 
 | Item | Status | Owner phase |
@@ -796,7 +890,9 @@ is the only such name.
 | Rerank model entitlement (`bge-reranker-v2-m3` vs `cohere-rerank-3.5`) | **Confirmed 2026-09-30.** Both appear in `pc.inference.list_models()` on the account T027 ran against. The interface is fixed either way | Closed |
 | Embedding models actually enabled on the account | **Confirmed 2026-09-30.** `llama-text-embed-v2` is entitled and is the model the live index reports. `multilingual-e5-large` is also entitled, so R-001's rejection of it rests on quality and its 512-token limit, not on availability | Closed |
 | Whether an over-length chunk is truncated or rejected | **Answered 2026-09-30:** embedded in full to ~7,800 estimated tokens; the ceiling is 40,960 bytes per vector, above which the write is rejected. See the R-001 and R-003 amendments | Closed |
-| The 40,960-byte-per-vector cap is not checked anywhere in the pipeline | Real gap, not a research question. `embed_hard_token_limit` is in tokens and cannot express it. Ingestion must fail loudly on an over-byte record | Phase 3 (T055) |
+| The 40,960-byte-per-vector cap is not checked anywhere in the pipeline | **Closed 2026-09-30.** `_fits` in `chunker.py` checks the byte ceiling alongside the token ceiling, and `test_no_chunk_exceeds_the_service_byte_limit` asserts it exactly. Tokens alone were insufficient: tables measure 1.38 chars/token, so a table judged "1,000 tokens" arrives at 6,898 bytes. An over-limit unit with no safe boundary is emitted **and** flagged rather than suppressed | Closed |
+| The robots gate has never run against live directives | Real gap. T049's gate is still to be written, so R-015's 154-page measurement used a permissive gate. What *is* tested is that sitemap-derived and link-derived URLs take the same gate, so the two cannot diverge once T049 lands | Phase 3 (T049) |
+| Two shipped functions were never exercised on their failure path | **Closed 2026-10-01.** `is_within_scope` used `zip(..., strict=True)` on a length the guard only bounded *below*, so it raised `ValueError` on every URL deeper than the scope prefix — i.e. every real URL. `scripts/validate_datasets.py`'s `_format_error` called `.get()` on a `jsonschema.ValidationError`, which has attributes, so it raised `AttributeError` on the first schema violation and had never reported one. Both were found by planting bad input, which is the only way either surfaces: both are on paths that only run when something is wrong. Both fixed, both now have tests | Closed |
 
 **Resolved 2026-09-28** — embedding model (`llama-text-embed-v2`), language model pair
 (`openai/gpt-oss-120b` generation, `openai/gpt-oss-20b` classification), and the nine-table

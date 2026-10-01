@@ -136,7 +136,10 @@ class Settings(BaseSettings):
     groq_max_retries: int = 1
 
     # -- database -----------------------------------------------------------
-    database_url: str = "postgresql+asyncpg://knowledge:knowledge@localhost:5432/knowledge"
+    # 5433 on the host, matching POSTGRES_PORT in .env.example and docker-compose.yml.
+    # A machine that already runs PostgreSQL on 5432 needs no override, which is the
+    # common case rather than the rare one.
+    database_url: str = "postgresql+asyncpg://knowledge:knowledge@localhost:5433/knowledge"
     database_pool_size: int = 5
     database_max_overflow: int = 5
 

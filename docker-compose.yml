@@ -24,12 +24,14 @@ services:
       # not part of the demonstration surface and has no reason to be reachable
       # from the network.
       #
-      # The host port is POSTGRES_PORT, defaulting to the conventional 5432. A
-      # developer who already runs PostgreSQL locally sets it to something else
-      # — the database is not reachable from another host either way, and a
-      # port collision is the single most common reason `make up` fails on a
-      # machine that is not a clean CI container. DATABASE_URL must match.
-      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+      # The host port is POSTGRES_PORT, defaulting to 5433 rather than the
+      # conventional 5432. A developer who already runs PostgreSQL locally then
+      # needs no change here at all — which is the common case, not the rare one,
+      # and a port collision is the single most common reason `make up` fails on
+      # a machine that is not a clean CI container. The database is bound to
+      # loopback and is not reachable from another host either way, so the
+      # non-standard host port costs nothing. DATABASE_URL must match.
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

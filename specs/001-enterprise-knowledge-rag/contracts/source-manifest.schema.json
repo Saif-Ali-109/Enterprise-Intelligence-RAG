@@ -46,6 +46,18 @@
           "pattern": "^https?://",
           "description": "The entry point. Must be a public http or https address; the address guard refuses anything else before a connection is opened (FR-044). A path disallowed by the site's crawling directives is excluded here rather than worked around."
         },
+        "sitemap_url": {
+          "type": ["string", "null"],
+          "format": "uri",
+          "maxLength": 2000,
+          "pattern": "^https?://",
+          "description": "The sitemap enumerating this source's documentation section, as declared in the host's own robots.txt. Measured 2026-10-01: the four support.atlassian.com sources expose 1-4 in-scope links each on their start_url, because the documentation navigation is rendered client-side and 656 of the 667 hrefs on access-a-project/ point at other products' directories. Link-following those four alone yields a corpus of REST API reference only, which cannot answer a single one of the curated questions about Jira user configuration, Confluence, or JSM. Declaring the sitemap is NOT an authorisation: every URL read from it passes the same robots gate as a link-derived one (FR-028), and is still held to this source's crawl scope. Null for a source that relies on link-following alone."
+        },
+        "scope_prefix": {
+          "type": ["string", "null"],
+          "pattern": "^/",
+          "description": "Explicit crawl scope as an absolute path prefix, with a trailing slash. Derived from start_url when omitted, which is correct for an ARTICLE entry point (/docs/access-a-project/ scopes to /docs/) but too broad for a start_url that IS a section index: the derived rule drops the leaf segment, so /cloud/jira/platform/ would scope to /cloud/jira/ and silently pull in sibling sections such as /cloud/jira/software/. Any source whose start_url names a section rather than a page states its scope here."
+        },
         "product_domain": {
           "type": ["string", "null"],
           "description": "Product this source documents, e.g. 'jira', 'confluence'. Null for a cross-product entry point, which causes retrieval to span domains (FR-013)."
@@ -60,7 +72,7 @@
           "minimum": 1,
           "maximum": 500,
           "default": 100,
-          "description": "Bounded crawl (FR-027). The demonstration corpus targets 50-100 pages overall (SC-011)."
+          "description": "Bounded crawl (FR-027), applied to this source alone. The six sources sum to a 155-page ceiling; SC-011 now states a 100-200 page corpus target, and a run over the six real sitemaps measured 154 pages queued."
         },
         "max_depth": {
           "type": "integer",
