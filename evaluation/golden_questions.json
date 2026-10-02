@@ -1,7 +1,7 @@
 {
-  "dataset_version": "1.1.0",
+  "dataset_version": "1.2.0",
   "generated_at": "2026-09-29T00:00:00Z",
-  "notes": "Thirty-two questions across all eight required categories and all three difficulties. Every expectation is expressed as TOPIC COVERAGE, never as a canonical answer string and never as a URL (FR-040, FR-063, FR-064). That is a deliberate consequence of the corpus being ingested by URL from documentation the publisher reorganises whenever they like: a dataset pinned to today's page structure would report a false regression the first time Atlassian renames a heading, and would report it as a retrieval regression when nothing about retrieval changed. contracts/evaluation-dataset.schema.json has additionalProperties: false and no URL field anywhere, so a pinned source cannot be introduced through a new property either. --- The 'unsupported' bucket is the deliberately-unanswerable set behind SC-008. Four questions are in it, all plausible-looking questions about things this corpus genuinely does not document, which is harder than asking about something obviously absurd. They must be refused with zero fabricated facts and zero fabricated citations. Retrieval metrics are null for them — not applicable to the question, not zero, and not a failure. --- 'topics' entries are each one checkable assertion rather than a topic label, so claim coverage (SC-006) is measurable. Where several phrasings are equally correct, they are listed in acceptable_alternatives rather than by widening 'topics', because widening topics makes coverage unfalsifiable. --- Independent technical demonstration. Not affiliated with, sponsored by, or endorsed by Atlassian. Questions are written from a user's point of view, not from any internal knowledge of the system. --- 2026-10-02 anchor audit: the 25 questions with an authored heading path matched 0 real corpus pages (not one segment). Paths were re-derived from verified pages (anchored), cleared where no corpus page exists (no-corpus-page / partially-anchored keeps the closest real page), and the four 'unsupported' questions keep must_refuse=true. Authored paths are preserved in each question's notes for audit.",
+  "notes": "Thirty-two questions across all eight required categories and all three difficulties. Every expectation is expressed as TOPIC COVERAGE, never as a canonical answer string and never as a URL (FR-040, FR-063, FR-064). That is a deliberate consequence of the corpus being ingested by URL from documentation the publisher reorganises whenever they like: a dataset pinned to today's page structure would report a false regression the first time Atlassian renames a heading, and would report it as a retrieval regression when nothing about retrieval changed. contracts/evaluation-dataset.schema.json has additionalProperties: false and no URL field anywhere, so a pinned source cannot be introduced through a new property either. --- The 'unsupported' bucket is the deliberately-unanswerable set behind SC-008. Four questions are in it, all plausible-looking questions about things this corpus genuinely does not document, which is harder than asking about something obviously absurd. They must be refused with zero fabricated facts and zero fabricated citations. Retrieval metrics are null for them — not applicable to the question, not zero, and not a failure. --- 'topics' entries are each one checkable assertion rather than a topic label, so claim coverage (SC-006) is measurable. Where several phrasings are equally correct, they are listed in acceptable_alternatives rather than by widening 'topics', because widening topics makes coverage unfalsifiable. --- Independent technical demonstration. Not affiliated with, sponsored by, or endorsed by Atlassian. Questions are written from a user's point of view, not from any internal knowledge of the system. --- 2026-10-02 anchor audit: the 25 questions with an authored heading path matched 0 real corpus pages (not one segment). Paths were re-derived from verified pages (anchored), cleared where no corpus page exists (no-corpus-page / partially-anchored keeps the closest real page), and the four 'unsupported' questions keep must_refuse=true. Authored paths are preserved in each question's notes for audit. --- 2026-10-02 re-selection pass: re-anchored 9 questions to verified pages (2 fully anchored, 7 partially-anchored) after the page-capped corpus showed 155 pages does not cover the alphabetized first-N topics; remaining gaps stay honestly marked no-corpus-page.",
   "questions": [
     {
       "id": "simple-jira-filter-saved",
@@ -123,13 +123,15 @@
         "must_refuse": false,
         "product": "jira",
         "category": "boards",
-        "heading_path": [],
+        "heading_path": [
+          "What is a board in business spaces?"
+        ],
         "topics": [
           "a board is backed by a filter or saved search",
           "the columns on the board are defined by that filter",
           "a newly created board starts from a default configuration that can be changed"
         ],
-        "notes": "The team-managed versus company-managed board distinction exists in the documentation. The topic expectation is that the answer explains what determines board contents, not that it picks a board type. | Anchor audit 2026-10-02: authored path ['Boards', 'Board configuration'] was NOT present in the crawled corpus; verdict=no-corpus-page. no crawled page describes a board's default contents; heading_path cleared"
+        "notes": "The team-managed versus company-managed board distinction exists in the documentation. The topic expectation is that the answer explains what determines board contents, not that it picks a board type. | Anchor audit 2026-10-02: authored path ['Boards', 'Board configuration'] was NOT present in the crawled corpus; verdict=no-corpus-page. no crawled page describes a board's default contents; heading_path cleared | 2026-10-02 re-selection pass: verdict revised to partially-anchored. no page documents a new board's default contents; nearest is the boards reference."
       }
     },
     {
@@ -384,13 +386,15 @@
         "must_refuse": false,
         "product": "jira",
         "category": "filters",
-        "heading_path": [],
+        "heading_path": [
+          "What are board filters?"
+        ],
         "topics": [
           "the filter's permissions may exclude the user from the issues they can see",
           "a shared-versus-private filter setting affects who can run it",
           "the filter may be scoped to a project the user does not have access to"
         ],
-        "notes": "The permission explanation is the substantive one. An answer that only says 'check your JQL' is unhelpful and misses the point of the question. | Anchor audit 2026-10-02: authored path ['Filter and search', 'Troubleshooting'] was NOT present in the crawled corpus; verdict=no-corpus-page. no troubleshooting page for empty filter results in the corpus"
+        "notes": "The permission explanation is the substantive one. An answer that only says 'check your JQL' is unhelpful and misses the point of the question. | Anchor audit 2026-10-02: authored path ['Filter and search', 'Troubleshooting'] was NOT present in the crawled corpus; verdict=no-corpus-page. no troubleshooting page for empty filter results in the corpus | 2026-10-02 re-selection pass: verdict revised to partially-anchored. no troubleshooting page for empty filter results; nearest is the board-filters reference."
       }
     },
     {
@@ -408,13 +412,15 @@
         "must_refuse": false,
         "product": "confluence",
         "category": "troubleshooting",
-        "heading_path": [],
+        "heading_path": [
+          "Delete, restore, or purge a content item"
+        ],
         "topics": [
           "a page restriction was added that excludes some users",
           "a space permission change removed access for a group",
           "the page was archived or moved, and the old link no longer resolves"
         ],
-        "notes": "Multiple causes may be correct. FR-040: an answer naming one valid cause well is not a failure for naming only one. Grade on whether the causes given are real documented causes. | Anchor audit 2026-10-02: authored path ['Troubleshoot access to content'] was NOT present in the crawled corpus; verdict=no-corpus-page. no vanished-page troubleshooting page in the corpus"
+        "notes": "Multiple causes may be correct. FR-040: an answer naming one valid cause well is not a failure for naming only one. Grade on whether the causes given are real documented causes. | Anchor audit 2026-10-02: authored path ['Troubleshoot access to content'] was NOT present in the crawled corpus; verdict=no-corpus-page. no vanished-page troubleshooting page in the corpus | 2026-10-02 re-selection pass: verdict revised to anchored. real page covering missing pages (delete/restore/purge)."
       }
     },
     {
@@ -456,13 +462,15 @@
         "must_refuse": false,
         "product": "jsm",
         "category": "request-management",
-        "heading_path": [],
+        "heading_path": [
+          "Choose suitable request type for connected email accounts"
+        ],
         "topics": [
           "the request type must be active and have a linked issue type",
           "the customer's account may lack permission to submit to that request queue",
           "email or portal-side validation can reject the submission before a request is created"
         ],
-        "notes": "This question spans several JSM pages by design, which is what makes it a genuine multi-hop retrieval test. An answer covering two of the three causes is acceptable and should not be scored as a failure. | Anchor audit 2026-10-02: authored path ['Manage customer requests', 'Troubleshoot request creation'] was NOT present in the crawled corpus; verdict=no-corpus-page. no missing-request troubleshooting page in the corpus"
+        "notes": "This question spans several JSM pages by design, which is what makes it a genuine multi-hop retrieval test. An answer covering two of the three causes is acceptable and should not be scored as a failure. | Anchor audit 2026-10-02: authored path ['Manage customer requests', 'Troubleshoot request creation'] was NOT present in the crawled corpus; verdict=no-corpus-page. no missing-request troubleshooting page in the corpus | 2026-10-02 re-selection pass: verdict revised to partially-anchored. diagnosis available for email-sourced requests; form submissions not covered."
       }
     },
     {
@@ -480,13 +488,15 @@
         "must_refuse": false,
         "product": "jira",
         "category": "projects",
-        "heading_path": [],
+        "heading_path": [
+          "Create a new space"
+        ],
         "topics": [
           "the project is created and its issue types configured",
           "a filter is defined and saved for the project's issues",
           "a board is created from that saved filter"
         ],
-        "notes": "Three distinct asks in one question. This is the multi-query-rewriting test (FR-013): a single undifferentiated search is the failure mode. An answer that addresses all three parts, even briefly, is correct. | Anchor audit 2026-10-02: authored path ['Create a project', 'Add a board', 'Filter and search'] was NOT present in the crawled corpus; verdict=no-corpus-page. no single page walks a full new-project setup; heading_path cleared"
+        "notes": "Three distinct asks in one question. This is the multi-query-rewriting test (FR-013): a single undifferentiated search is the failure mode. An answer that addresses all three parts, even briefly, is correct. | Anchor audit 2026-10-02: authored path ['Create a project', 'Add a board', 'Filter and search'] was NOT present in the crawled corpus; verdict=no-corpus-page. no single page walks a full new-project setup; heading_path cleared | 2026-10-02 re-selection pass: verdict revised to partially-anchored. project creation covered; the issue-types+filter+board setup half is in other pages but not described together."
       }
     },
     {
@@ -504,13 +514,15 @@
         "must_refuse": false,
         "product": "confluence",
         "category": "spaces",
-        "heading_path": [],
+        "heading_path": [
+          "Create a space"
+        ],
         "topics": [
           "a space is created for the team's documentation",
           "space permissions are configured to control who can view and edit",
           "a page tree or template structure is established for the content"
         ],
-        "notes": "Two products of work: structure and access. Both must be addressed. | Anchor audit 2026-10-02: authored path ['Create a space', 'Space permissions', 'Technical documentation'] was NOT present in the crawled corpus; verdict=no-corpus-page. only the access half of the question is covered; heading_path cleared"
+        "notes": "Two products of work: structure and access. Both must be addressed. | Anchor audit 2026-10-02: authored path ['Create a space', 'Space permissions', 'Technical documentation'] was NOT present in the crawled corpus; verdict=no-corpus-page. only the access half of the question is covered; heading_path cleared | 2026-10-02 re-selection pass: verdict revised to partially-anchored. space creation covered; document-structure and access-control halves are separate pages."
       }
     },
     {
@@ -578,13 +590,15 @@
         "must_refuse": false,
         "product": null,
         "category": "linking",
-        "heading_path": [],
+        "heading_path": [
+          "Link a Confluence page to a sprint"
+        ],
         "topics": [
           "a Confluence link can be added to a Jira issue",
           "the link is created from the issue or from the Confluence side",
           "the linked content is shown on the issue"
         ],
-        "notes": "product is null because the question genuinely spans two products. The answer should reference both Jira and Confluence; an answer covering only one domain is incomplete, which is exactly what SC-004 measures. | Anchor audit 2026-10-02: authored path ['Use Jira Cloud with Confluence', 'Smart links'] was NOT present in the crawled corpus; verdict=no-corpus-page. no page documents linking an issue to a Confluence page; heading_path cleared"
+        "notes": "product is null because the question genuinely spans two products. The answer should reference both Jira and Confluence; an answer covering only one domain is incomplete, which is exactly what SC-004 measures. | Anchor audit 2026-10-02: authored path ['Use Jira Cloud with Confluence', 'Smart links'] was NOT present in the crawled corpus; verdict=no-corpus-page. no page documents linking an issue to a Confluence page; heading_path cleared | 2026-10-02 re-selection pass: verdict revised to partially-anchored. corpus only covers linking a page to a sprint/epic; a general issue↔page link flow is not documented."
       }
     },
     {
@@ -676,13 +690,15 @@
         "must_refuse": false,
         "product": null,
         "category": "notifications",
-        "heading_path": [],
+        "heading_path": [
+          "View your notifications"
+        ],
         "topics": [
           "the system recognises the question spans products with different notification models",
           "the system searches the notification documentation of more than one product",
           "the system states the ambiguity rather than silently choosing"
         ],
-        "notes": "Same failure mode as the permissions question: silent narrowing. A confident single-product answer, however accurate, does not pass this question. | Anchor audit 2026-10-02: authored path [] was NOT present in the crawled corpus; verdict=no-corpus-page. no notification-preferences troubleshooting in the corpus"
+        "notes": "Same failure mode as the permissions question: silent narrowing. A confident single-product answer, however accurate, does not pass this question. | Anchor audit 2026-10-02: authored path [] was NOT present in the crawled corpus; verdict=no-corpus-page. no notification-preferences troubleshooting in the corpus | 2026-10-02 re-selection pass: verdict revised to partially-anchored. Confluence notification viewing documented; Jira/JSM notification preferences not in the corpus."
       }
     },
     {
@@ -699,13 +715,15 @@
         "must_refuse": false,
         "product": null,
         "category": null,
-        "heading_path": [],
+        "heading_path": [
+          "Export data from Jira Cloud"
+        ],
         "topics": [
           "the system does not force a single product classification",
           "results are drawn from more than one product domain where relevant",
           "the system reports the scope it actually searched"
         ],
-        "notes": "Every product in the corpus has its own export mechanism. This tests that low confidence produces a WIDER search rather than a narrowed one (FR-010, FR-014). | Anchor audit 2026-10-02: authored path [] was NOT present in the crawled corpus; verdict=no-corpus-page. no general per-product export page in the corpus"
+        "notes": "Every product in the corpus has its own export mechanism. This tests that low confidence produces a WIDER search rather than a narrowed one (FR-010, FR-014). | Anchor audit 2026-10-02: authored path [] was NOT present in the crawled corpus; verdict=no-corpus-page. no general per-product export page in the corpus | 2026-10-02 re-selection pass: verdict revised to anchored. Jira export documented (export-issues); Confluence also has content export (export-content-from-confluence-cloud); JSM has none in the corpus."
       }
     },
     {
