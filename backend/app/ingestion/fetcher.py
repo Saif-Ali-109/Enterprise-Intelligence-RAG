@@ -304,10 +304,61 @@ def log_response_failure(response: httpx.Response, *, context: str) -> None:
     )
 
 
+async def fetch_page(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    allowed_domains: list[str] | frozenset[str],
+    robots_gate: Callable[[str], bool] | None = None,
+    max_bytes: int | None = None,
+) -> httpx.Response:
+    """Stage-1 fetch: SSRF pre-flight, then the robots gate, then the fetch.
+
+    The order is load-bearing. `assert_fetchable` runs first because SSRF
+    refusal is about *us* refusing to connect; evaluating robots for an
+    address we are not going to connect to adds a round-trip to a host we
+    decided not to ask anything of, and it must not leak a DNS resolution we
+    did not want. The robots check runs *before* the fetch because a
+    disallowance means the page must never have been requested at all — a
+    gate that fetches first and filters after is not a gate (FR-028). When
+    the gate refuses, `RobotsDisallowed` is raised and nothing is sent.
+
+    `robots_gate` is the same synchronous predicate discovery uses — a
+    `RobotsGate` primed with the endpoint list, passed as its
+    `allows_sync` method. Discovery and the fetch stage then apply the
+    *identical* decision function, so a path that passed the frontier filter
+    cannot be refused by the fetch stage, and vice versa (FR-028's "one
+    authorisation path"). A None gate is allowed for tests/offline paths
+    only, and every production caller must pass one.
+
+    `max_bytes` enforces the document-level cap from settings at the fetch
+    boundary rather than waiting for a multi-megabyte page to fully
+    materialise in memory (FR-043). The actual body is returned; the caller
+    still decodes, so a content-type mismatch is the caller's check
+    (T051).
+    """
+    from app.core.errors import RobotsDisallowed
+    from app.core.security import assert_fetchable, enforce_max_bytes
+
+    assert_fetchable(url, allowed_domains=allowed_domains)
+
+    if robots_gate is not None and not robots_gate(url):
+        raise RobotsDisallowed(details={"url": url})
+
+    settings = get_settings()
+    response = await client.get(url)
+    log_response_failure(response, context="stage-1 fetch")
+    if response.is_success:
+        cap = max_bytes if max_bytes is not None else settings.crawl_max_bytes
+        enforce_max_bytes(response.content, limit=cap, field="page")
+    return response
+
+
 __all__ = [
     "CAPACITY_SIGNAL",
     "BoundedRetryTransport",
     "SharedClient",
     "build_client",
+    "fetch_page",
     "log_response_failure",
 ]
