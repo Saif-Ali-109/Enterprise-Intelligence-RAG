@@ -94,6 +94,21 @@ _CONTAINER_TAGS = frozenset({"list", "table", "code", "quote"})
 #: line breaks and highlighted spans, and they matter for `code` blocks.
 _TEXT_TAGS = frozenset({"p", "item", "cell", "lb", "hi", "ref", "head"})
 
+#: heading tags the direct fallback walk recognises, in any of h1-h6.
+_RAW_HEADINGS = re.compile(r"<h[1-6]\b", re.IGNORECASE)
+
+#: Elements in the linear fallback that never produce content blocks. Without
+#: dropping them, a page's navigation and chrome <h2>s would become headings and
+#: the path they feed to every subsequent block would be invented structure.
+_FALLBACK_SKIP_TAGS = frozenset({"nav", "header", "footer", "aside", "script", "style", "noscript"})
+
+_FALLBACK_BLOCK_TAGS = frozenset({"p", "pre", "table", "blockquote"})
+_FALLBACK_HEADING_TAGS = frozenset({f"h{n}" for n in range(1, 7)})
+
+
+def _raw_html_has_headings(html: str) -> bool:
+    return bool(_RAW_HEADINGS.search(html))
+
 
 @dataclass(frozen=True, slots=True)
 class ExtractedBlock:
@@ -348,6 +363,130 @@ def reconstruct_heading_paths(
     return units
 
 
+def _extract_linear_fallback(html: str) -> list[ExtractedBlock]:
+    """Walk the raw HTML when trafilatura flattened away every heading.
+
+    Measured on developer.atlassian.com (2026-10-02 probe): the served HTML
+    carries rich, server-rendered `<h2>`–`<h5>` trees, yet trafilatura's XML
+    drops every one of them (`extract_units` then returns units with no
+    `heading_path`, which FR-018 accepts but leaves every citation unanchored).
+    When that combination is detected, this fallback rebuilds the heading stack
+    and content blocks directly from the served HTML, using the same push
+    semantics as `reconstruct_heading_paths`. The trade is cleaner text for
+    real structure: trafilatura's boilerplate filtering is bypassed, so page
+    chrome (site title as `<h1>`, login panels, footer links) may ride along.
+    It is a fallback, not a replacement, and it never runs for pages where
+    trafilatura already recovered headings.
+    """
+
+    from lxml import etree
+
+    try:
+        root = etree.fromstring(html.encode("utf-8"), parser=etree.HTMLParser(recover=True))
+    except Exception as exc:  # noqa: BLE001
+        raise InternalError("The page could not be parsed for main content.") from exc
+    if root is None:
+        raise InternalError("The page could not be parsed for main content.")
+
+    stack: list[str] = []
+    stack_levels: list[int] = []
+    units: list[ExtractedBlock] = []
+
+    def _text_of_el(element: Any) -> str:
+        # inline <style>/<script> elements ride along inside page fragments and
+        # their CSS/JS must never become heading text or block text.
+        parts: list[str] = []
+
+        def collect(el: Any) -> None:
+            tag = el.tag if isinstance(el.tag, str) else ""
+            if tag in ("style", "script", "noscript"):
+                if el.tail:
+                    parts.append(el.tail)
+                return
+            if el.text:
+                parts.append(el.text)
+            for child in el:
+                collect(child)
+            if el.tail:
+                parts.append(el.tail)
+
+        collect(element)
+        return " ".join(" ".join(parts).split())
+
+    def _emit(tag: str, element: Any) -> None:
+        text = _text_of_el(element)
+        if not text:
+            return
+        block_type: BlockType
+        if tag == "pre":
+            block_type = "code"
+        elif tag == "blockquote":
+            block_type = "quote"
+        elif tag == "table":
+            block_type = "table"
+        elif tag in ("ul", "ol"):
+            block_type = "list"
+        else:
+            block_type = "p"
+        units.append(
+            ExtractedBlock(
+                block_type=block_type,
+                text=text,
+                heading_path=list(stack),
+                heading_level=stack_levels[-1] if stack_levels else 0,
+            )
+        )
+
+    def _has_block_descendant(element: Any) -> bool:
+        for descendant in element.iter():
+            tag = descendant.tag if isinstance(descendant.tag, str) else ""
+            if tag in _FALLBACK_BLOCK_TAGS or tag in _FALLBACK_HEADING_TAGS or tag in ("ul", "ol"):
+                return True
+        return False
+
+    def _walk(element: Any) -> None:
+        tag = element.tag if isinstance(element.tag, str) else ""
+        if tag in _FALLBACK_SKIP_TAGS:
+            return
+        if tag in _FALLBACK_HEADING_TAGS:
+            level = int(tag[1])
+            heading = _normalise_heading(_text_of_el(element))
+            if heading:
+                _push_heading(stack, stack_levels, level=level, heading=heading)
+            return
+        if tag in ("ul", "ol"):
+            items = [_normalise_heading(_text_of_el(li)) for li in element.iter("li")]
+            text = "\n".join(item for item in items if item)
+            if text:
+                units.append(
+                    ExtractedBlock(
+                        block_type="list",
+                        text=text,
+                        heading_path=list(stack),
+                        heading_level=stack_levels[-1] if stack_levels else 0,
+                    )
+                )
+            return
+        if tag in _FALLBACK_BLOCK_TAGS:
+            _emit(tag, element)
+            return
+        if tag in ("div", "section", "article", "main", "body") and not _has_block_descendant(
+            element
+        ):
+            if _text_of_el(element):
+                _emit("p", element)
+            return
+        for child in element:
+            _walk(child)
+
+    body = root.find(".//body")
+    start = body if body is not None else root
+    for child in start:
+        _walk(child)
+
+    return units
+
+
 def extract_units(html: str, *, base_url: str | None = None) -> list[ExtractedBlock]:
     """The whole of T052: trafilatura, then the walk.
 
@@ -356,9 +495,20 @@ def extract_units(html: str, *, base_url: str | None = None) -> list[ExtractedBl
     boilerplate check in T051, the second by tests) — but the pipeline always
     wants the two in sequence, and a caller assembling the order by hand is a
     caller who can get it backwards and index a body with no heading paths.
+
+    `developer.atlassian.com` is the measured exception: trafilatura keeps the
+    text but flattens every heading, so the usual path returns units with no
+    heading path. The service still needs per-unit paths for FR-018/FR-021 and
+    one source must never silently degrade the shared evaluation (FR-063), so
+    when that combination occurs — trafilatura found no headings, yet the
+    served HTML has some — fall back to a direct linear walk of the raw HTML
+    (Text of the page keeps whatever it could; headings come back).
     """
     xml = extract_main_content(html, base_url=base_url)
-    return reconstruct_heading_paths(_iter_body_blocks(xml))
+    units = reconstruct_heading_paths(_iter_body_blocks(xml))
+    if not any(b.heading_path for b in units) and _raw_html_has_headings(html):
+        return _extract_linear_fallback(html)
+    return units
 
 
 __all__ = [
