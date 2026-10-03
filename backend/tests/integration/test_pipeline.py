@@ -40,7 +40,7 @@ import pytest
 from app.core.errors import CrawlAlreadyRunning, DocumentDeleted, RobotsDisallowed
 from app.core.logging import get_logger
 from app.db.models import CrawlJob, Document, DocumentUnit, Source
-from app.db.session import create_all, dispose_engine, get_engine, get_session_factory
+from app.db.session import dispose_engine, get_session_factory
 from app.ingestion.page_pipeline import ingest_page
 from app.ingestion.pipeline import (
     active_job_for,
@@ -50,11 +50,16 @@ from app.ingestion.pipeline import (
     run_crawl,
     start_crawl_job,
 )
-from sqlalchemy import select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tests.fixtures.credentials import seed_placeholder_credentials
+from tests.fixtures.database import (
+    describe_connection_failure,
+    migrate_to_head,
+    truncate_all,
+)
 from tests.fixtures.vector_store import RecordingVectorStore
 
 pytestmark = pytest.mark.integration
@@ -72,45 +77,38 @@ ALLOWED = ["support.atlassian.com"]
 # ---------------------------------------------------------------------------
 
 
-async def _postgres_reachable() -> bool:
+@pytest.fixture(scope="module")
+def _schema() -> None:
+    """The schema, as the migrations build it. See `tests/fixtures/database.py`.
+
+    Module-scoped because it is synchronous and therefore has no event loop to
+    outlive, and because migrations are not free. A database that is not there
+    is a skip, not an error: these properties live in PostgreSQL's constraints,
+    and without PostgreSQL they are not being tested.
+    """
     try:
-        async with get_engine().connect() as connection:
-            await connection.execute(text("SELECT 1"))
-    except Exception as exc:  # noqa: BLE001 - the absence of a database is a skip
+        migrate_to_head()
+    except OperationalError as exc:
         _log.warning("postgres unavailable", extra={"error": type(exc).__name__})
-        return False
-    return True
+        pytest.skip(describe_connection_failure())
 
 
 @pytest.fixture(autouse=True)
-async def _database() -> AsyncIterator[None]:
-    """A schema that exists, and no rows that do not.
+async def _database(_schema: None) -> AsyncIterator[None]:
+    """No rows from another test, and the schema still there afterwards.
 
     Function-scoped rather than module-scoped because
     `asyncio_default_fixture_loop_scope` is `function`: an asyncpg pool belongs
     to the loop that opened it, so a module-scoped fixture would hand a later
-    test's loop a pool bound to an earlier loop's connections. `create_all` is
-    idempotent and cheap on an empty schema, and `drop_all` in teardown leaves
-    the developer's database as this module found it.
+    test's loop a pool bound to an earlier loop's connections.
+
+    Truncating before each test is not tidiness. The partial unique index on
+    active crawl jobs makes a leftover `running` job a legitimate database state
+    that would make the *next* test's crawl fail for the wrong reason.
     """
-    if not await _postgres_reachable():
-        pytest.skip(
-            "PostgreSQL is not reachable; the pipeline's guarantees live in its constraints"
-        )
-    await create_all()
-    # Truncate before each test, so one test's crawl job cannot block the next.
-    # The partial unique index on active crawl jobs makes this necessary rather
-    # than tidy: a leftover `running` job is a legitimate database state that
-    # would make the *next* test's crawl fail for the wrong reason.
-    async with get_engine().begin() as connection:
-        await connection.execute(text("TRUNCATE sources CASCADE"))
+    await truncate_all()
     yield
-    # Truncate, do not drop. Another suite may run after this one and expects
-    # the tables to exist — `routes_config` counts documents and units to
-    # report the corpus size, and a suite that leaves the schema behind fails
-    # that test for a reason that has nothing to do with either of them.
-    async with get_engine().begin() as connection:
-        await connection.execute(text("TRUNCATE sources CASCADE"))
+    await truncate_all()
     # The engine is a process-wide singleton whose asyncpg pool belongs to the
     # event loop that opened it. This suite's loop is per-function, so without
     # this the next test inherits connections bound to a closed loop and every
@@ -173,10 +171,25 @@ async def source(session: AsyncSession) -> RegisteredSource:
 
 @dataclass(frozen=True, slots=True)
 class FakeResponse:
+    """A stand-in for `httpx.Response`, carrying what the crawl actually reads.
+
+    `status_code` and `is_success` are here because the orchestrator reads both:
+    a non-success body is the site's answer rather than its content, and a fake
+    that omitted them let a 404 page be ingested as if it were a document — a
+    defect found by writing the crawl-service tests, and fixed here so the fake
+    matches the real type's contract rather than the subset the tests happened
+    to use.
+    """
+
     text: str
     headers: dict[str, str] = field(
         default_factory=lambda: {"content-type": "text/html; charset=utf-8"}
     )
+    status_code: int = 200
+
+    @property
+    def is_success(self) -> bool:
+        return 200 <= self.status_code < 300
 
 
 def page(title: str, *paragraphs: str) -> str:
@@ -246,10 +259,12 @@ class Fetcher:
         *,
         failures: dict[str, Exception] | None = None,
         content_types: dict[str, str] | None = None,
+        statuses: dict[str, int] | None = None,
     ) -> None:
         self.pages = pages
         self.failures = failures or {}
         self.content_types = content_types or {}
+        self.statuses = statuses or {}
         self.requested: list[str] = []
 
     async def __call__(self, url: str) -> FakeResponse:
@@ -261,9 +276,12 @@ class Fetcher:
             return FakeResponse(
                 text="<html><body><p>Not found</p></body></html>",
                 headers={"content-type": "text/html"},
+                status_code=404,
             )
         return FakeResponse(
-            text=body, headers={"content-type": self.content_types.get(url, "text/html")}
+            text=body,
+            headers={"content-type": self.content_types.get(url, "text/html")},
+            status_code=self.statuses.get(url, 200),
         )
 
 
@@ -587,9 +605,7 @@ class TestOrchestrator:
         refused = f"{SUPPORT}/contact/sales/"
         fetch = Fetcher({allowed: alpha_page("Boards")}, failures={refused: RobotsDisallowed()})
 
-        result = await run(
-            session, store, source, fetch, candidates=candidates(allowed, refused)
-        )
+        result = await run(session, store, source, fetch, candidates=candidates(allowed, refused))
 
         assert result.status == "completed"
         assert result.counts.failed == 0
@@ -600,7 +616,7 @@ class TestOrchestrator:
         assert job is not None
         assert job.error_code is None
         assert job.pages_skipped == 1
-        assert (job.skipped_reasons or {}).get("skip_reasons", {}).get("robots_disallowed") == 1
+        assert (job.skipped_reasons or {}).get("robots_disallowed") == 1
 
         document = await get_document(session, source.id, refused)
         assert document is None, "a page the crawler was told not to read is not registered"
@@ -696,6 +712,136 @@ class TestOrchestrator:
 # ---------------------------------------------------------------------------
 # T062 / T048: deletion (FR-031, FR-056, SC-013)
 # ---------------------------------------------------------------------------
+
+
+class TestHttpStatuses:
+    """A non-success body is the site's answer, never its content.
+
+    These four tests exist because of a defect the *wiring* tests found: the
+    orchestrator handed whatever `fetch` returned straight to `ingest_page`, so a
+    404 page was extracted as a document and a vendor's styled 503 page would
+    have been indexed as citable evidence. `ingest_page`'s size floors caught the
+    small cases by accident, which is not a guarantee — they measure characters,
+    and a styled error page has plenty.
+    """
+
+    async def test_a_404_body_is_never_indexed_even_when_it_looks_like_a_page(
+        self, session, store, source
+    ) -> None:
+        """The strong form: a full-length, valid page served with a 404.
+
+        A test that serves a short "Not found" body would pass against the old
+        code, because `too_small` rejects it — for the wrong reason, and without
+        the property being enforced anywhere.
+        """
+        url = f"{SUPPORT}moved/"
+        fetch = Fetcher({url: alpha_page("Moved")}, statuses={url: 404})
+
+        result = await run(session, store, source, fetch, candidates=candidates(url))
+
+        assert store.records == {}, "a 404 page was indexed"
+        assert result.counts.indexed == 0
+        assert result.counts.failed == 0, "a 404 is not our failure"
+
+    async def test_a_404_is_a_skip_with_its_own_reason(self, session, store, source) -> None:
+        url = f"{SUPPORT}moved/"
+        fetch = Fetcher({url: alpha_page("Moved")}, statuses={url: 404})
+
+        result = await run(session, store, source, fetch, candidates=candidates(url))
+
+        assert result.counts.skipped == 1
+        assert result.counts.contract_skipped_reasons()["http_error"] == 1
+        assert result.status == "completed", "a page the site does not have is not a broken crawl"
+
+    async def test_the_refusal_is_recorded_with_its_status(self, session, store, source) -> None:
+        """The audit trail says what happened, not merely that something did."""
+        url = f"{SUPPORT}moved/"
+        fetch = Fetcher({url: alpha_page("Moved")}, statuses={url: 404})
+
+        await run(session, store, source, fetch, candidates=candidates(url))
+
+        document = await get_document(session, source.id, url)
+        assert document is not None, "a page we asked for and were refused should be visible"
+        assert document.state == "failed"
+        assert document.state_detail == {
+            "code": "http_error",
+            "status": 404,
+            "message": "The site answered 404.",
+        }
+        assert document.vectors_live is False
+
+    async def test_a_5xx_is_a_failure_not_a_skip(self, session, store, source) -> None:
+        """Transient, and worth retrying — which is where `pages_failed` is read."""
+        url = f"{SUPPORT}boards/"
+        fetch = Fetcher({url: alpha_page("Boards")}, statuses={url: 503})
+
+        result = await run(session, store, source, fetch, candidates=candidates(url))
+
+        assert result.counts.failed == 1
+        assert result.counts.skipped == 0
+        assert result.status == "completed_with_errors"
+
+        document = await get_document(session, source.id, url)
+        assert document is not None
+        assert document.state_detail == {
+            "code": "http_server_error",
+            "status": 503,
+            "message": "The site answered 503.",
+        }
+
+    async def test_a_429_is_a_failure(self, session, store, source) -> None:
+        """Rate limiting is a failure to fetch, not a statement about the page.
+
+        The retry transport has already exhausted its budget for this response by
+        the time the orchestrator sees it, so the run's job is to record it where
+        an operator's alert looks.
+        """
+        url = f"{SUPPORT}boards/"
+        fetch = Fetcher({url: alpha_page("Boards")}, statuses={url: 429})
+
+        result = await run(session, store, source, fetch, candidates=candidates(url))
+
+        assert result.counts.failed == 1
+        assert store.records == {}
+
+    async def test_a_refused_page_does_not_stop_the_crawl(self, session, store, source) -> None:
+        good = f"{SUPPORT}boards/"
+        moved = f"{SUPPORT}moved/"
+        fetch = Fetcher(
+            {good: alpha_page("Boards"), moved: alpha_page("Moved")},
+            statuses={moved: 404},
+        )
+
+        result = await run(session, store, source, fetch, candidates=candidates(moved, good))
+
+        assert result.status == "completed"
+        assert result.counts.indexed == 1
+        assert store.live_ids, "the surviving page was not indexed"
+
+    async def test_a_failed_status_keeps_the_previous_version_live(
+        self, session, store, source
+    ) -> None:
+        """FR-054 applies to a refusal exactly as it applies to an exception.
+
+        A page that was indexed once and now 404s is the case where deleting
+        would be tempting and wrong: the crawl saw an error, not an absence of
+        content.
+        """
+        url = f"{SUPPORT}boards/"
+        await run(
+            session, store, source, Fetcher({url: alpha_page("Boards")}), candidates=candidates(url)
+        )
+        live_before = dict(store.records)
+
+        await run(
+            session, store, source, Fetcher({}, statuses={url: 404}), candidates=candidates(url)
+        )
+
+        assert store.records == live_before
+        document = await get_document(session, source.id, url)
+        assert document is not None
+        assert document.state == "failed"
+        assert document.vectors_live is True
 
 
 class TestDeletion:

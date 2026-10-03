@@ -745,6 +745,14 @@ async def run_crawl(
     counted, and recorded against the job, then the next page is fetched. A
     crawl that stops at the first 500 loses the whole corpus behind one bad
     URL (FR-054).
+
+    `job` is for the caller that must return the job to a client *before* the
+    crawl runs — the registration endpoint, whose response body includes the job
+    it started. Passing one in skips `start_crawl_job`, so the job in the
+    response is the job that does the work rather than a second, equally valid
+    one. The caller owns committing that row; this function commits it only when
+    it created it, because "the row must outlive the process" is a statement
+    about whoever wrote it.
     """
     settings = get_settings()
     page_cap = (
@@ -770,8 +778,8 @@ async def run_crawl(
         # Committed before the first fetch. The job row is the audit trail, and
         # it holds the partial unique index that makes FR-055 true — leaving it
         # uncommitted for the length of the run would mean a crash erased the
-        # very record that explains the crash, and released the source while the
-        # document list still claimed it was being crawled.
+        # very record that explains the crash, and released the source while
+        # the document list still claimed it was being crawled.
         await session.commit()
 
     try:
@@ -800,6 +808,16 @@ async def run_crawl(
             try:
                 response = await fetch(url)
                 content_type = response.headers.get("content-type")
+                if not response.is_success:
+                    # The site's answer, not its content. A 404's body is a
+                    # "not found" page and a 503's is an apology, and ingesting
+                    # either would put an error page into the corpus where the
+                    # retrieval layer can cite it as evidence. `ingest_page` would
+                    # usually reject these as `too_small`, which is both the wrong
+                    # reason recorded and no protection at all: a vendor's
+                    # styled 500 page is large, and large is what the floors measure.
+                    await _record_http_status(session, source_id, url, response.status_code, counts)
+                    continue
                 ingestion = ingest_page(response.text, url=url, content_type=content_type)
             except RobotsDisallowed:
                 # A refusal by the site's own directives is not a failure: the
@@ -960,17 +978,70 @@ async def _record_page_failure(
     and the transaction it was attempted in is the one that has to be undone.
     """
     await session.rollback()
-    code = _error_code(exc)
+    await _record_page_outcome(
+        session,
+        source_id,
+        url,
+        code=_error_code(exc),
+        detail={"message": _safe_message(exc)},
+    )
+
+
+async def _record_http_status(
+    session: AsyncSession,
+    source_id: uuid.UUID,
+    url: str,
+    status: int,
+    counts: CrawlCounts,
+) -> None:
+    """Record a non-success response, and count it where it belongs.
+
+    **A 4xx is a skip and a 5xx (or 429) is a failure.** A 404 is an answer
+    about the page — it is not there, or not for us — and counting it as a
+    failure would make a crawl of a site with one moved page read as broken. A
+    503 is the site failing to serve the page, which is transient and worth
+    retrying, so it belongs in `pages_failed` where an operator's attention
+    belongs.
+
+    One detail, one status, in `state_detail`: the document row is the audit
+    trail for "we asked and were told no", and it is what a later re-crawl
+    compares against. The status goes in the row rather than only the log
+    because the log is gone by the time anyone asks.
+    """
+    if status >= 500 or status == 429:
+        counts.failed += 1
+        code = "http_server_error"
+    else:
+        counts.skip("http_error")
+        code = "http_error"
+    _log.warning("page refused with an http status", extra={"url": url, "status": status})
+    await _record_page_outcome(
+        session,
+        source_id,
+        url,
+        code=code,
+        detail={"status": status, "message": f"The site answered {status}."},
+    )
+
+
+async def _record_page_outcome(
+    session: AsyncSession,
+    source_id: uuid.UUID,
+    url: str,
+    *,
+    code: str,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """Write the failure row, then commit it.
+
+    A recording failure must not end the crawl: the counter has already been
+    incremented, and losing the row would leave a page that was counted and not
+    recorded. The rollback keeps the registry consistent even in that case.
+    """
     try:
-        await mark_failed(
-            session,
-            source_id=source_id,
-            url=url,
-            code=code,
-            detail={"message": _safe_message(exc)},
-        )
+        await mark_failed(session, source_id=source_id, url=url, code=code, detail=detail)
         await session.commit()
-    except Exception:  # noqa: BLE001 - recording a failure must not end the crawl
+    except Exception as exc:  # noqa: BLE001 - recording a failure must not end the crawl
         await session.rollback()
         _log.error("could not record page failure", extra={"url": url, "error": type(exc).__name__})
 
