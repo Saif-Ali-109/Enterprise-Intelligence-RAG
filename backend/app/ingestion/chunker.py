@@ -407,4 +407,24 @@ def _block_texts(chunk: Chunk) -> set[str]:
     return {b.text.strip() for b in chunk.blocks if b.text.strip()}
 
 
-__all__ = ["Chunk", "ChunkResult", "RejectedUnit", "chunk_units"]
+def overlap_tokens(chunk: Chunk, previous: Chunk | None) -> int:
+    """Estimated tokens `chunk` repeats from `previous` (FR-016, auditable).
+
+    Measured from provenance — the two units' block texts compared directly —
+    rather than by searching for a repeated substring. The number the registry
+    stores is therefore what actually repeats, and a unit whose overlap was
+    dropped for crossing a section boundary reports zero instead of an
+    optimistic estimate.
+    """
+    if previous is None:
+        return 0
+    shared = _block_texts(previous)
+    total = 0
+    for block in chunk.blocks:
+        text = block.text.strip()
+        if text and text in shared:
+            total += estimate_tokens(block.text, block_type=block.block_type)
+    return total
+
+
+__all__ = ["Chunk", "ChunkResult", "RejectedUnit", "chunk_units", "overlap_tokens"]
