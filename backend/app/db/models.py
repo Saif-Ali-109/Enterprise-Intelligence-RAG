@@ -126,6 +126,15 @@ class Source(Base):
         String, nullable=False, default="active", server_default="active"
     )
     last_crawl_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Per-source crawl bounds (FR-027). Columns rather than crawl-request
+    # arguments because the contract lets a client change them with `PATCH`:
+    # a bound that is not stored is a bound the next caller cannot see, and a
+    # `PATCH` that validates a field and then discards it is worse than an API
+    # that never accepted it. Null means "use the configured default", which is
+    # why the orchestrator treats `None` as "not overridden" rather than as 0.
+    max_pages: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_depth: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    delay_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     manifest_version: Mapped[str | None] = mapped_column(String, nullable=True)
 
@@ -153,6 +162,19 @@ class Source(Base):
         CheckConstraint("status IN ('active', 'disabled', 'error')", name="ck_sources_status"),
         CheckConstraint(
             "cardinality(allowed_domains) > 0", name="ck_sources_allowed_domains_non_empty"
+        ),
+        # A bound of 0 would produce an empty frontier; a negative one is a
+        # bug that must not reach the crawler as a page cap.
+        CheckConstraint(
+            "max_pages IS NULL OR max_pages BETWEEN 1 AND 500",
+            name="ck_sources_max_pages_range",
+        ),
+        CheckConstraint(
+            "max_depth IS NULL OR max_depth BETWEEN 0 AND 5", name="ck_sources_max_depth_range"
+        ),
+        CheckConstraint(
+            "delay_seconds IS NULL OR delay_seconds BETWEEN 0.1 AND 60",
+            name="ck_sources_delay_seconds_range",
         ),
         # FR-009: a null product is an explicit unknown, not a missing value.
         CheckConstraint(

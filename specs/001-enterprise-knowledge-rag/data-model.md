@@ -69,6 +69,7 @@ A registered public documentation entry point.
 | `enabled` | `BOOLEAN` | no | default `true` |
 | `status` | `TEXT` | no | `active` \| `disabled` \| `error` |
 | `last_crawl_at` | `TIMESTAMPTZ` | yes | |
+| `max_pages` / `max_depth` / `delay_seconds` | `INTEGER` / `INTEGER` / `REAL` | yes | Per-source crawl bounds (FR-027). **Added 2026-10-03** with migration `b7d41c0a92f3`, because `SourceUpdate` in `contracts/openapi.yaml` accepts all three and a bound that is validated then discarded is worse than an API that never offered it. Null means "use the configured default"; the orchestrator treats null as not-overridden, never as zero |
 | `created_at` / `updated_at` | `TIMESTAMPTZ` | no | |
 
 **Validation**: `start_url` scheme ∈ {`http`, `https`} only. `allowed_domains` derives from
