@@ -447,3 +447,54 @@ class TestConfigurationContents:
             except Exception:  # noqa: BLE001 - cleanup must not mask the result
                 pass
             await dispose_engine()
+
+
+class TestEnvListParsing:
+    """The operator's two list formats, both loaded, neither rejected.
+
+    A regression guard for a startup failure observed in the field: with
+    pydantic-settings, a `list[str]` field is JSON-decoded from its env value
+    *before* a normalising validator runs, so the documented
+    ``ALLOWED_DOMAINS=a.com,b.com`` form of `.env` failed to start the process
+    with a `SettingsError` that never named the offending line. The fields are
+    now annotated `NoDecode` and the validator does the parse.
+    """
+
+    def test_comma_separated_domains(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from app.core.config import Settings
+
+        monkeypatch.setenv("ALLOWED_DOMAINS", "support.atlassian.com, developer.atlassian.com")
+        settings = Settings()
+        assert settings.allowed_domains == ["support.atlassian.com", "developer.atlassian.com"]
+
+    def test_json_array_domains(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from app.core.config import Settings
+
+        monkeypatch.setenv("ALLOWED_DOMAINS", '["a.com", "b.com"]')
+        assert Settings().allowed_domains == ["a.com", "b.com"]
+
+    def test_comma_separated_origins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from app.core.config import Settings
+
+        monkeypatch.setenv("CORS_ORIGINS", "http://localhost:3000,https://example.com")
+        assert Settings().cors_origins == ["http://localhost:3000", "https://example.com"]
+
+    def test_dotenv_file_comma_separated(self, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from app.core.config import Settings
+
+        for name in ("ALLOWED_DOMAINS", "CORS_ORIGINS"):
+            monkeypatch.delenv(name, raising=False)
+        env_file = tmp_path / ".env"
+        env_file.write_text("ALLOWED_DOMAINS=a.com,b.com\nCORS_ORIGINS=http://x,http://y\n")
+        settings = Settings(_env_file=env_file)  # type: ignore[call-arg]
+        assert settings.allowed_domains == ["a.com", "b.com"]
+        assert settings.cors_origins == ["http://x", "http://y"]
+
+    def test_unset_still_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from app.core.config import Settings
+
+        monkeypatch.delenv("ALLOWED_DOMAINS", raising=False)
+        monkeypatch.delenv("CORS_ORIGINS", raising=False)
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert "confluence.atlassian.com" in settings.allowed_domains
+        assert settings.cors_origins == ["http://localhost:3000"]

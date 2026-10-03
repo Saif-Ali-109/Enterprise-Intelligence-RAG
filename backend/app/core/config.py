@@ -21,11 +21,12 @@ The two rules that shape this module:
 from __future__ import annotations
 
 import functools
+import json
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # ============================================================================
 # Domain vocabulary
@@ -144,7 +145,13 @@ class Settings(BaseSettings):
     database_max_overflow: int = 5
 
     # -- crawler ------------------------------------------------------------
-    allowed_domains: list[str] = Field(
+    # `NoDecode`, with the comma-splitting validator below: pydantic-settings
+    # JSON-decodes `list[str]` env values *before* any validator runs, so the
+    # comma-separated form an operator writes in `.env` fails to parse with an
+    # error that never names the line — the failure that this annotation,
+    # verified by `tests/unit/test_config.py::test_*dotenv*`, exists to remove.
+    # The validator below accepts both `A,B,C` and a JSON array.
+    allowed_domains: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: [
             "support.atlassian.com",
             "developer.atlassian.com",
@@ -242,7 +249,9 @@ class Settings(BaseSettings):
 
     # -- API ----------------------------------------------------------------
     api_prefix: str = "/api/v1"
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    cors_origins: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["http://localhost:3000"]
+    )
     rate_limit_general_per_minute: int = 60
     rate_limit_ask_per_minute: int = 20
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
@@ -276,11 +285,20 @@ class Settings(BaseSettings):
         JSON array is what a structured deployer writes. Both are legitimate;
         rejecting one of them pushes people toward hand-editing a compose file,
         which is how credentials end up in version control.
+
+        This validator does the JSON decode itself because the fields are
+        annotated `NoDecode` — without `NoDecode`, pydantic-settings tries to
+        JSON-decode *every* complex field before this validator runs, and a
+        comma-separated value arrives here as an unreadable `SettingsError`
+        instead of as a string.
         """
         if isinstance(value, str):
             stripped = value.strip()
             if stripped.startswith("["):
-                return value  # a JSON string; pydantic-settings will parse it
+                try:
+                    return json.loads(stripped)
+                except ValueError as exc:
+                    raise ValueError(f"not a JSON array of strings: {stripped!r}") from exc
             return [item.strip() for item in stripped.split(",") if item.strip()]
         return value
 
