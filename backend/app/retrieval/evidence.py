@@ -21,6 +21,7 @@ from app.retrieval.reranker import RerankedHit
 class _RegistryShape(Protocol):
     """Not the vector store; what the evidence stage needs about each unit."""
 
+    unit_id: str
     document_id: str
     source_id: str
     category: str | None
@@ -39,10 +40,11 @@ class EvidenceUnit:
     """
 
     hit: RerankedHit
-    document_id: str
-    source_id: str
-    category: str | None
-    page_type: str | None
+    unit_id: str = ""
+    document_id: str = ""
+    source_id: str = ""
+    category: str | None = None
+    page_type: str | None = None
     heading_path: list[str] = field(default_factory=list)
     token_count: int = 0
     retrieval_score: float = 0.0
@@ -111,6 +113,7 @@ def select_evidence(
         )
         return EvidenceUnit(
             hit=h,
+            unit_id=getattr(registry, "unit_id", "") or "",
             document_id=getattr(registry, "document_id", "") or "",
             source_id=getattr(registry, "source_id", "") or "",
             category=getattr(registry, "category", None),

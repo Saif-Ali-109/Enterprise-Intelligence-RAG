@@ -101,6 +101,10 @@ class Candidate:
     heading_path: list[str] = field(default_factory=list)
     token_count: int = 0
     ordinal: int = 0
+    # The store-side metadata record, passed through so the reranker can rank
+    # (its input type requires text AND metadata instead of a shape that has to
+    # be re-derived at the rerank step).
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 _DEFAULT_NAMESPACE_CANDIDATE = "atlassian-public"
@@ -177,6 +181,7 @@ async def retrieve(
                 heading_path=list(unit.heading_path) if unit.heading_path is not None else [],
                 token_count=unit.token_count,
                 ordinal=unit.ordinal,
+                metadata=dict(metadata),
             )
         )
     return candidates
