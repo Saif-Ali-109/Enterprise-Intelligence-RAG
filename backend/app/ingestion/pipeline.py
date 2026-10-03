@@ -42,7 +42,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.errors import CrawlAlreadyRunning, DocumentDeleted, StateConflict
+from app.core.errors import CrawlAlreadyRunning, DocumentDeleted, RobotsDisallowed, StateConflict
 from app.core.logging import get_logger
 from app.db.models import CrawlJob, Document, DocumentUnit, Source
 from app.ingestion.chunker import Chunk, ChunkResult, overlap_tokens
@@ -772,6 +772,16 @@ async def run_crawl(
                 response = await fetch(url)
                 content_type = response.headers.get("content-type")
                 ingestion = ingest_page(response.text, url=url, content_type=content_type)
+            except RobotsDisallowed:
+                # A refusal by the site's own directives is not a failure: the
+                # page was never fetched, nothing was attempted, and the run is
+                # correct. Recorded as a skip with its own reason so
+                # `pages_skipped` and `skipped_reasons` answer "why did the
+                # crawler not read that page" without a client inferring it
+                # from an error code (FR-028, FR-054).
+                counts.skip("robots_disallowed")
+                _log.info("page refused by robots", extra={"url": url, "via": via})
+                continue
             except IngestionRejected as exc:
                 counts.rejected += 1
                 counts.skip(exc.reason)

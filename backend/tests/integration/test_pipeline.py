@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
-from app.core.errors import CrawlAlreadyRunning, DocumentDeleted
+from app.core.errors import CrawlAlreadyRunning, DocumentDeleted, RobotsDisallowed
 from app.core.logging import get_logger
 from app.db.models import CrawlJob, Document, DocumentUnit, Source
 from app.db.session import create_all, dispose_engine, get_engine, get_session_factory
@@ -571,6 +571,39 @@ class TestOrchestrator:
         assert result.counts.rejected == 2
         assert result.counts.indexed == 1
         assert result.status == "completed", "a rejected page is not a failed page"
+
+    async def test_a_robots_refusal_is_recorded_as_a_skip_not_a_failure(
+        self, session, store, source
+    ) -> None:
+        """FR-028, through the orchestrator's own accounting.
+
+        A refusal by the site's directives is not an error: nothing was
+        attempted, and the run is correct. Recording it as a failure would put
+        a `ROBOTS_DISALLOWED` error code on a healthy job and make
+        `completed_with_errors` the outcome of a crawl that did what it was
+        told.
+        """
+        allowed = f"{SUPPORT}boards/"
+        refused = f"{SUPPORT}/contact/sales/"
+        fetch = Fetcher({allowed: alpha_page("Boards")}, failures={refused: RobotsDisallowed()})
+
+        result = await run(
+            session, store, source, fetch, candidates=candidates(allowed, refused)
+        )
+
+        assert result.status == "completed"
+        assert result.counts.failed == 0
+        assert result.counts.skip_reasons.get("robots_disallowed") == 1
+        assert result.counts.indexed == 1
+
+        job = await session.get(CrawlJob, result.job_id)
+        assert job is not None
+        assert job.error_code is None
+        assert job.pages_skipped == 1
+        assert (job.skipped_reasons or {}).get("skip_reasons", {}).get("robots_disallowed") == 1
+
+        document = await get_document(session, source.id, refused)
+        assert document is None, "a page the crawler was told not to read is not registered"
 
     async def test_page_cap_is_enforced_by_the_orchestrator(self, session, store, source) -> None:
         urls = [f"{SUPPORT}page-{i}/" for i in range(4)]
