@@ -980,3 +980,57 @@ class TestDeletion:
         assert document is not None
         assert document.state == "indexed"
         assert document.vectors_live is True
+
+
+class TestCallerOwnedJob:
+    async def test_a_caller_owned_job_ends_completed(self, store, source) -> None:
+        """Registration flow: the endpoint creates the job, the task crawls in a
+        *different* session — and the row must still end `completed`.
+
+        Regression for a bug caught live: the job object handed to `run_crawl`
+        was committed in the endpoint's session and *attached to it*, so the
+        crawl's session never observed the mutations `finish_crawl_job` made —
+        pages were indexed, vectors upserted, the job row stayed `running`
+        forever, and the partial unique index blocked every later crawl. The fix
+        re-reads the job into the crawl's session before touching it.
+
+        This is exercised with a *closed* endpoint session, not a rollback, so
+        the job object arrives detached exactly as the endpoint's does.
+        """
+        from app.db.session import get_session_factory
+
+        url = f"{SUPPORT}boards/"
+        factory = get_session_factory()
+
+        async with factory() as post_session:
+            job = await start_crawl_job(
+                post_session, source_id=source.id, target_url=source.start_url
+            )
+            await post_session.commit()
+            job_id = job.id
+        # post_session is closed; `job` is detached.
+
+        async with factory() as crawl_session:
+            result = await run_crawl(
+                crawl_session,
+                store,
+                source_id=source.id,
+                fetch=Fetcher({url: alpha_page("Boards")}),
+                candidates=candidates(url),
+                delay_seconds=0,
+                job=job,
+            )
+
+        assert result.status == "completed"
+        assert result.counts.indexed == 1
+
+        # The operator-facing claim: a fresh session must see the row the crawl
+        # finished with. Reading it via `job` (the detached object) would have
+        # shown the in-memory, never-persisted mutation.
+        async with factory() as check_session:
+            row = await check_session.get(CrawlJob, job_id)
+            assert row is not None
+            assert row.status == "completed"
+            assert row.pages_discovered == 1
+            assert row.pages_processed == 1
+            assert row.finished_at is not None

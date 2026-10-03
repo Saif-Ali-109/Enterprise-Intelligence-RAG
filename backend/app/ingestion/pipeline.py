@@ -781,6 +781,14 @@ async def run_crawl(
         # very record that explains the crash, and released the source while
         # the document list still claimed it was being crawled.
         await session.commit()
+    else:
+        # The caller that hands this job in created and committed it in *its*
+        # session (the registration endpoint's), so the object arrives detached.
+        # Mutating it and committing *this* session would then silently write
+        # nothing, and the audit row would stay "running" forever — the bug
+        # `test_a_caller_owned_job_ends_completed` exists to keep fixed. The row
+        # existed before this run; only the session it sleeps in changes.
+        job = (await session.execute(select(CrawlJob).where(CrawlJob.id == job.id))).scalar_one()
 
     try:
         selected = [c for c in candidates if c[1] <= depth_cap][:page_cap]
