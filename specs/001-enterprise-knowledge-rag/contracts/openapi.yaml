@@ -188,15 +188,29 @@ paths:
             schema: { $ref: '#/components/schemas/SourceCreate' }
       responses:
         '201':
-          description: Registered; crawl started
+          description: 'Registered; crawl started unless the request set `start_crawl: false`'
           content:
             application/json:
               schema:
                 type: object
-                required: [source, crawl_job]
+                required: [source]
                 properties:
                   source: { $ref: '#/components/schemas/Source' }
-                  crawl_job: { $ref: '#/components/schemas/CrawlJob' }
+                  crawl_job:
+                    description: |
+                      The job that will perform the crawl. **Null when the request set
+                      `start_crawl: false`.**
+
+                      *Amended 2026-10-03.* This field was required and non-null. That forced a
+                      registration with `start_crawl: false` to invent a job, and the only
+                      invented job that can exist — a `queued` row — holds the partial unique
+                      index `crawl_jobs_one_active_per_source`, so the operator's next explicit
+                      `POST /sources/{source_id}/crawl` was refused as "already running" against
+                      a crawl that never began. A `null` here is the honest answer; a caller that
+                      asked for no crawl gets no job to poll.
+                    anyOf:
+                      - { $ref: '#/components/schemas/CrawlJob' }
+                      - { type: 'null' }
         '200':
           description: Already registered; the existing source is returned
           content:

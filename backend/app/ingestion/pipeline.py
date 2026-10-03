@@ -591,6 +591,7 @@ class CrawlCounts:
         self.skip_reasons[reason] = self.skip_reasons.get(reason, 0) + count
 
     def as_dict(self) -> dict[str, Any]:
+        """Every tally, for logs and debugging. Not an API shape."""
         return {
             "discovered": self.discovered,
             "processed": self.processed,
@@ -603,6 +604,32 @@ class CrawlCounts:
             "vectors_deleted": self.vectors_deleted,
             "skip_reasons": dict(sorted(self.skip_reasons.items())),
         }
+
+    def contract_counters(self) -> dict[str, int]:
+        """The five counters `CrawlJob.counters` declares, and only those.
+
+        The contract closes that object with `additionalProperties: false`, and
+        the tallies it does not name are not lost — `indexed` is `processed`
+        minus `unchanged`, and the vectors written are visible on the
+        documents. A closed shape is worth the arithmetic.
+        """
+        return {
+            "discovered": self.discovered,
+            "processed": self.processed,
+            "unchanged": self.unchanged,
+            "skipped": self.skipped,
+            "failed": self.failed,
+        }
+
+    def contract_skipped_reasons(self) -> dict[str, int]:
+        """Why pages were not processed, as the flat map the column declares.
+
+        Flat, and integer-valued, because that is what `skipped_reasons` is in
+        data-model.md §2.4 and in the contract: `{robots_disallowed: 3,
+        too_small: 1}`. Nesting a richer object inside would be a shape no
+        client can read with a simple lookup.
+        """
+        return dict(sorted(self.skip_reasons.items()))
 
 
 @dataclass(frozen=True, slots=True)
@@ -682,7 +709,7 @@ async def finish_crawl_job(
     job.pages_unchanged = counts.unchanged
     job.pages_skipped = counts.skipped
     job.pages_failed = counts.failed
-    job.skipped_reasons = counts.as_dict()
+    job.skipped_reasons = counts.contract_skipped_reasons()
     job.error_code = error_code
     job.error_message = error_message
     job.finished_at = _utcnow()
@@ -703,6 +730,7 @@ async def run_crawl(
     sleep: Callable[[float], Any] = asyncio.sleep,
     scope_prefix: str | None = None,
     progress: Callable[[str], None] | None = None,
+    job: CrawlJob | None = None,
 ) -> CrawlResult:
     """Crawl a bounded set of pages, recording every outcome.
 
@@ -732,18 +760,19 @@ async def run_crawl(
     if source is None:
         raise StateConflict(f"source {source_id} does not exist")
 
-    job = await start_crawl_job(
-        session,
-        source_id=source_id,
-        target_url=source.start_url,
-        scope_prefix=scope_prefix,
-    )
-    # Committed before the first fetch. The job row is the audit trail, and it
-    # holds the partial unique index that makes FR-055 true — leaving it
-    # uncommitted for the length of the run would mean a crash erased the very
-    # record that explains the crash, and released the source while the
-    # document list still claimed it was being crawled.
-    await session.commit()
+    if job is None:
+        job = await start_crawl_job(
+            session,
+            source_id=source_id,
+            target_url=source.start_url,
+            scope_prefix=scope_prefix,
+        )
+        # Committed before the first fetch. The job row is the audit trail, and
+        # it holds the partial unique index that makes FR-055 true — leaving it
+        # uncommitted for the length of the run would mean a crash erased the
+        # very record that explains the crash, and released the source while the
+        # document list still claimed it was being crawled.
+        await session.commit()
 
     try:
         selected = [c for c in candidates if c[1] <= depth_cap][:page_cap]
@@ -834,7 +863,7 @@ async def run_crawl(
         await session.commit()
     except Exception as exc:  # noqa: BLE001 - the run itself failed, not one page
         await session.rollback()
-        job = await _fail_job(session, job_id=job.id, exc=exc)
+        job = await fail_crawl_job(session, job_id=job.id, exc=exc)
         raise
 
     await finish_crawl_job(session, job=job, counts=counts)
@@ -946,7 +975,17 @@ async def _record_page_failure(
         _log.error("could not record page failure", extra={"url": url, "error": type(exc).__name__})
 
 
-async def _fail_job(session: AsyncSession, *, job_id: uuid.UUID, exc: BaseException) -> CrawlJob:
+async def fail_crawl_job(
+    session: AsyncSession, *, job_id: uuid.UUID, exc: BaseException
+) -> CrawlJob:
+    """Close a job as `failed` and commit it, whatever state the run left behind.
+
+    Public because a caller can fail *before* `run_crawl` starts — the start page
+    fetch and the sitemap read happen in `crawl_service` — and a crawl whose
+    failure precedes the orchestrator needs the same closing row written by the
+    same code. The rollback is unconditional: this is the failure path, and
+    whatever the failed step left uncommitted is not something to publish.
+    """
     await session.rollback()
     job = await session.get(CrawlJob, job_id)
     if job is not None:
@@ -1010,6 +1049,7 @@ __all__ = [
     "SupersessionPlan",
     "active_job_for",
     "delete_document",
+    "fail_crawl_job",
     "finish_crawl_job",
     "get_document",
     "get_document_for_update",

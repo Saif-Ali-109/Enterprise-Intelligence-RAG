@@ -301,12 +301,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # once the adapters are wired.
     routes_health.register_probe(routes_health.DATABASE, routes_health.database_probe)
 
+    # A job row left `running` by a process that died holds
+    # `crawl_jobs_one_active_per_source`, so the source cannot be crawled again
+    # until someone edits the database by hand. Every failure here is swallowed:
+    # a database that is unreachable at startup must produce an app that boots
+    # and *reports* it through `/health`, not an app that never starts.
+    from app.ingestion.crawl_service import cancel_all, reclaim_orphaned_jobs
+
+    try:
+        await reclaim_orphaned_jobs()
+    except Exception as exc:  # noqa: BLE001 - reported by /health instead
+        _log.warning(
+            "could not reclaim crawl jobs at startup",
+            extra={"error": type(exc).__name__},
+        )
+
     try:
         yield
     finally:
         _log.info("shutting down")
 
         from app.db.session import dispose_engine
+
+        # Crawls first: cancelling one closes its job row, and doing that before
+        # the engine is disposed is the difference between a job marked
+        # `cancelled` and a job left `running` for the next process to reclaim.
+        try:
+            cancelled = await cancel_all()
+            if cancelled:
+                _log.info("cancelled in-flight crawls at shutdown", extra={"count": cancelled})
+        except Exception as exc:  # noqa: BLE001 - shutdown must still release resources
+            _log.warning("could not cancel in-flight crawls", extra={"error": type(exc).__name__})
 
         await client.__aexit__(None, None, None)
         await dispose_engine()
@@ -349,6 +374,24 @@ def create_app(*, enable_probes: bool = True) -> FastAPI:
         docs_url=f"{settings.api_prefix}/docs",
         openapi_url=f"{settings.api_prefix}/openapi.json",
         redoc_url=None,
+        # Declared once, here, because FastAPI's *automatic* 422 is wrong for this
+        # API in two ways. Its status is not in the contract's table — a validation
+        # failure is `VALIDATION_ERROR`/`400` — and its schema (`HTTPValidationError`,
+        # with a free-form `ctx` object and the offending input echoed in every
+        # entry) is exactly the shape `validation_error_handler` exists to refuse.
+        # Naming a 422 response at the app level is what stops FastAPI generating
+        # its own for each route that has a body or a validated query parameter.
+        responses={
+            "422": {
+                "model": ErrorResponse,
+                "description": (
+                    "Not returned: request validation failures are rendered by the app-level "
+                    "handler as `VALIDATION_ERROR` with status 400 and the standard error "
+                    "envelope. Declared so FastAPI does not add its own `HTTPValidationError` "
+                    "schema, which echoes the offending input."
+                ),
+            }
+        },
     )
 
     # Order: middleware outermost, so the request id exists before any handler
