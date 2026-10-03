@@ -1,0 +1,9 @@
+# This is a private operator tool, not a public site.
+#
+# It exists to answer questions from a corpus an operator registers, and there
+# is nothing here for a crawler to index: no documentation, no articles, no
+# marketing copy. Disallowing everything is therefore accurate rather than
+# defensive — and it is consistent with the rest of this project, whose crawler
+# obeys the same directive when it reads a third party's documentation.
+User-agent: *
+Disallow: /
