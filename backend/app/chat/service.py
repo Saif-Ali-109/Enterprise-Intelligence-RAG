@@ -28,7 +28,12 @@ from app.core.logging import get_request_id, new_request_id
 from app.generation.generator import generate_answer
 from app.generation.provider import LLMProvider
 from app.generation.verifier import verify_answer
-from app.retrieval.citations import EvidenceSource, validate_citations
+from app.retrieval.citations import (
+    EvidenceSource,
+    citation_granularity,
+    resolve_answer_markers,
+    validate_citations,
+)
 from app.retrieval.evidence import build_leads, gate_evidence, select_evidence
 from app.retrieval.query_analyzer import analyze_question
 from app.retrieval.query_rewriter import rewrite_queries
@@ -75,13 +80,6 @@ def _refused(
     if trace is not None:
         payload["trace"] = trace
     return ChatResult(payload=payload, stages_ms=stages_ms)
-
-
-def _verified_answer_text(answer: str, citations: list[dict[str, Any]]) -> str:
-    # The answer carries no inline marks; citations are the contract the client
-    # pivots on. Returning the text unaltered keeps a citation-free paragraph a
-    # genuine paragraph rather than a marker-bearing one.
-    return answer
 
 
 async def run_chat(
@@ -385,7 +383,48 @@ async def _answer(
         )
         for u in evidence
     ]
-    cited_ids = [c.evidence_id for c in generated.citations]
+    # Inline markers first, then the model's own citation list. Both are resolved
+    # against what was served; the union is what the answer actually leans on, and
+    # the marker order is what puts `[1]` on the first claim the reader sees.
+    served_ids = [u.hit.id for u in evidence]
+    markers = resolve_answer_markers(generated.answer, served_ids)
+    cited_ids = list(
+        dict.fromkeys([*markers.cited_ids, *(c.evidence_id for c in generated.citations)])
+    )
+
+    granularity = citation_granularity(markers, cited_ids)
+
+    if granularity == "none":
+        # An answer whose claims point at nothing is the one failure FR-002 exists
+        # to prevent, and it is checked here rather than trusted: the model's own
+        # `citations` array can name served ids the prose never leans on, and a
+        # reader cannot check a claim against a list they were shown no link from.
+        # Refused, not shipped with a citation list bolted on afterwards.
+        #
+        # The *weaker* case — sources named, claims not marked inline — is
+        # answered, with the difference recorded in the trace. Measured live: the
+        # model marks claims in about half its answers, and refusing the rest would
+        # refuse half of all answerable questions over a formatting habit while
+        # their citations resolved exactly as well.
+        return _refused(
+            request_id=request_id,
+            question=question,
+            reason="GENERATION_FAILED",
+            searched={
+                "queries": rewrites,
+                "products": [analysis.detected_product],
+                "applied_filters": applied_filters,
+                "candidates_retrieved": len(all_candidates),
+                "candidates_reranked": len(reranked),
+                "evidence_selected": len(evidence),
+            },
+            leads=[],
+            total_ms=int((time.perf_counter() - started) * 1000),
+            trace=trace if inspect else None,
+            query_analysis=query_analysis_payload,
+            stages_ms=stages_ms,
+        )
+
     validation = validate_citations(
         cited_ids,
         retrieved=evidence_sources,
@@ -414,6 +453,13 @@ async def _answer(
     ]
 
     if inspect:
+        trace["citations"] = {
+            **trace.get("citations", {}),
+            "unresolved_markers": markers.rejected,
+            # `per_claim` or `list`: whether each claim named its own source, or
+            # the sources were named once at the end. Recorded either way.
+            "granularity": granularity,
+        }
         trace["generation"] = {
             "attempts": attempts,
             "verification": verification.classification if verification else None,
@@ -430,7 +476,7 @@ async def _answer(
         "request_id": request_id,
         "question": question,
         "outcome": "answered",
-        "answer": _verified_answer_text(generated.answer, citations_payload),
+        "answer": markers.text,
         "citations": citations_payload,
         "timing": {"total_ms": int((time.perf_counter() - started) * 1000), "stages_ms": stages_ms},
         "query_analysis": query_analysis_payload,

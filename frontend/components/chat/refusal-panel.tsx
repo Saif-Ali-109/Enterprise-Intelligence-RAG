@@ -28,7 +28,15 @@ export function RefusalPanel({ response }: RefusalPanelProps) {
   const searched = response.searched;
 
   return (
-    <Card labelledBy="refusal-heading">
+    <Card
+      labelledBy="refusal-heading"
+      // Visibly its own thing, and visibly *not* a fault. A left rule and a
+      // slightly raised surface say "this is the system's answer, and the answer
+      // was nothing" — where an identical card beside the question box reads as
+      // another form to fill in. Deliberately muted rather than red: red is the
+      // fault palette, and a refusal is a result (FR-008).
+      className="border-l-4 border-l-muted-foreground/50 bg-muted/30"
+    >
       <CardHeader>
         <CardTitle id="refusal-heading">Not answered</CardTitle>
         <p className="text-sm">{describeRefusal(response.refusal_reason)}</p>

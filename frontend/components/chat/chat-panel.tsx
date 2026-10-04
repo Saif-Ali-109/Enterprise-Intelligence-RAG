@@ -34,6 +34,7 @@ import { useState } from "react";
 import type { AskResponse } from "@/lib/api-client";
 import { QUESTION_MAX_LENGTH, useAsk } from "@/hooks/useChat";
 import { CitationList } from "@/components/chat/citation-list";
+import { withCitationLinks } from "@/components/chat/citation-links";
 import { RefusalPanel } from "@/components/chat/refusal-panel";
 import { UnavailablePanel } from "@/components/chat/unavailable-panel";
 import { Textarea } from "@/components/ui/input";
@@ -162,10 +163,16 @@ function AnswerRegion({ response }: { response: AskResponse }) {
         {/*
           `answer` is non-null exactly when `outcome` is `answered`; the fallback
           sentence exists so a malformed response cannot render an empty box that
-          reads as "nothing to say".
+          reads as "nothing to say". The `[n]` markers inside it are the citation
+          ranks the service resolved from the model's inline markers, and they are
+          rendered as links to the citation they name — so a claim and its evidence
+          are one click apart, which is the point of FR-002.
         */}
         <p className="whitespace-pre-wrap text-sm leading-relaxed">
-          {response.answer ?? "The service returned an answer with no text."}
+          {withCitationLinks(
+            response.answer ?? "The service returned an answer with no text.",
+            response.citations.length,
+          )}
         </p>
         <div className="mt-4 grid gap-3">
           <h3 className="text-sm font-medium">Sources</h3>

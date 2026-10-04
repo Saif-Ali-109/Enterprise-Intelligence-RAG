@@ -141,3 +141,109 @@ class TestNoModelReach:
             retrieved=[_source("a", url="https://support.atlassian.com/x")],
         )
         assert result.citations
+
+
+class TestInlineMarkers:
+    """FR-002 per claim, resolved by code: `[E2]` becomes `[1]`, or nothing.
+
+    The marker is how a reader tells *which* source supports *which* sentence. A
+    citation list that is correct but unattached to the prose is decoration, so
+    the resolution is deterministic and an answered response whose claims point at
+    no evidence is refused by the service rather than shipped.
+    """
+
+    def test_a_marker_becomes_the_citation_rank(self) -> None:
+        from app.retrieval.citations import resolve_answer_markers
+
+        served = ["unit-a", "unit-b"]
+        result = resolve_answer_markers("POST to /issue [E1]. It returns a key [E2].", served)
+
+        assert result.text == "POST to /issue [1]. It returns a key [2]."
+        assert result.cited_ids == ["unit-a", "unit-b"]
+
+    def test_markers_number_by_first_appearance_not_by_marker_number(self) -> None:
+        """`[E3]` first means the third unit is citation **1**.
+
+        The reader matches `[1]` to the first source under the answer, so the rank
+        has to follow the prose rather than the evidence order.
+        """
+        from app.retrieval.citations import resolve_answer_markers
+
+        result = resolve_answer_markers("Claim [E3]. Another [E1].", ["a", "b", "c"])
+
+        assert result.text == "Claim [1]. Another [2]."
+        assert result.cited_ids == ["c", "a"]
+
+    def test_the_same_unit_marked_twice_is_one_citation(self) -> None:
+        from app.retrieval.citations import resolve_answer_markers
+
+        result = resolve_answer_markers("First [E1]. Second, the same source [E1].", ["a", "b"])
+
+        assert result.text == "First [1]. Second, the same source [1]."
+        assert result.cited_ids == ["a"]
+
+    def test_a_marker_for_unserved_evidence_resolves_to_nothing(self) -> None:
+        """Never pointed at whatever happens to sit at that index."""
+        from app.retrieval.citations import resolve_answer_markers
+
+        result = resolve_answer_markers("Claim [E7].", ["a", "b"])
+
+        assert result.cited_ids == []
+        assert result.rejected == ["E7"]
+        assert "E7" not in result.text
+
+    def test_an_answer_with_no_markers_cites_nothing(self) -> None:
+        from app.retrieval.citations import resolve_answer_markers
+
+        result = resolve_answer_markers("A fluent, unsupported paragraph.", ["a", "b"])
+
+        assert result.cited_ids == []
+        assert result.text == "A fluent, unsupported paragraph."
+
+    def test_ordinary_bracketed_numbers_are_left_alone(self) -> None:
+        """`[1]` in the model's own prose is not a marker we own.
+
+        Only `[E<n>]` is ours; anything else in the text is the answer's, and
+        rewriting it would edit prose to fit our bookkeeping.
+        """
+        from app.retrieval.citations import resolve_answer_markers
+
+        result = resolve_answer_markers("Step [1] of the process [E1].", ["a"])
+
+        assert result.text == "Step [1] of the process [1]."
+        assert result.cited_ids == ["a"]
+
+    def test_a_marker_at_the_end_of_a_line_does_not_leave_a_gap(self) -> None:
+        from app.retrieval.citations import resolve_answer_markers
+
+        result = resolve_answer_markers("Claim [E9].\n\nNext paragraph.", ["a"])
+
+        assert "[E9]" not in result.text
+        assert "  " not in result.text
+
+
+class TestCitationGranularity:
+    """Which guarantee an answer actually carries, decided by code.
+
+    Measured live: the model produced inline claim markers in 3 of 6 answers, so
+    `list` is a real state rather than a theoretical one. It is answered, and
+    recorded as the weaker guarantee it is.
+    """
+
+    def test_marked_claims_are_per_claim(self) -> None:
+        from app.retrieval.citations import ResolvedMarkers, citation_granularity
+
+        markers = ResolvedMarkers(text="Claim [1].", cited_ids=["a"], rejected=[])
+        assert citation_granularity(markers, ["a"]) == "per_claim"
+
+    def test_sources_without_markers_are_a_list(self) -> None:
+        from app.retrieval.citations import ResolvedMarkers, citation_granularity
+
+        markers = ResolvedMarkers(text="An answer.", cited_ids=[], rejected=[])
+        assert citation_granularity(markers, ["a"]) == "list"
+
+    def test_nothing_cited_is_none_and_is_the_only_refused_state(self) -> None:
+        from app.retrieval.citations import ResolvedMarkers, citation_granularity
+
+        markers = ResolvedMarkers(text="A fluent, uncited paragraph.", cited_ids=[], rejected=[])
+        assert citation_granularity(markers, []) == "none"

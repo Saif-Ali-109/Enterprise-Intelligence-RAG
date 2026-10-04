@@ -17,6 +17,7 @@ of going through a second interpretation step.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable
 from typing import Any
 
@@ -30,6 +31,13 @@ Every citation you attach MUST reference an evidence id that was supplied
 below, using its exact identifier. Do not invent identifiers, URLs, titles, or
 quotes. If the evidence cannot answer the question, decline rather than speculate: say so
 and set "answerable" to false. Do not invent.
+
+**Mark every substantive claim inline.** After each claim, on the same line, write
+its evidence marker in brackets — `[E1]`, `[E3]` — using the markers from the list
+below. A claim with no marker is a claim the reader cannot check, so an answer
+whose sentences carry no markers is refused and treated as if it had not been
+written. Mark only what the unit actually supports; a marker on a sentence the
+unit does not support is worse than no marker at all.
 
 Match conditional phrasing from the source exactly — if the evidence renders a
 permission a prerequisite, so must your answer (FR-006). Do not present a
@@ -46,11 +54,24 @@ Return strict JSON only, of exactly this shape:
   ]
 }"""
 
-_PER_UNIT_PREFIX = "EV-"
+#: The marker the model writes inline, and the one the response carries after
+#: resolution. `E1` is short enough to type inside a sentence and unique within one
+#: answer; the reader sees the citation's rank, which is what the citation list is
+#: ordered by, so the two name the same thing on screen.
+EVIDENCE_MARKER = re.compile(r"\[E(\d+)\]")
 
 
 def evidence_ids(units: Iterable[EvidenceUnit]) -> list[str]:
     return [u.hit.id for u in units]
+
+
+def marker_for(index: int) -> str:
+    """`E1` for the first unit.
+
+    One-based, because a prompt that offers `[E0]` and a reader who counts from one
+    disagree about the same sentence.
+    """
+    return f"E{index}"
 
 
 def build_answer_prompt(question: str, units: list[EvidenceUnit]) -> tuple[str, str]:
@@ -65,10 +86,12 @@ def build_answer_prompt(question: str, units: list[EvidenceUnit]) -> tuple[str, 
         raise ValueError("a question with no evidence is a refusal, not a generation request")
 
     lines = [
-        "Evidence for the question:\n",
+        "Evidence for the question. Cite these markers inline:",
+        "",
     ]
-    for unit in units:
-        lines.append(f"### {unit.hit.id}")
+    for number, unit in enumerate(units, start=1):
+        lines.append(f"### [{marker_for(number)}]")
+        lines.append(f"- evidence_id: {unit.hit.id}")
         lines.append(
             f"- source_url: {unit.hit.metadata.get('source_url') or unit.hit.metadata.get('title') or 'unknown'}"
         )
@@ -86,7 +109,7 @@ def build_answer_prompt(question: str, units: list[EvidenceUnit]) -> tuple[str, 
     lines.append(question)
     lines.append("")
     lines.append(
-        "For each substantive claim in your answer, name the evidence id from the list above that supports it."
+        f"Write the answer with an inline marker such as [{marker_for(1)}] after every substantive claim."
     )
     return _RULES, "\n".join(lines)
 
@@ -103,4 +126,10 @@ def parse_model_answer(blob: str) -> dict[str, Any] | None:
     return None
 
 
-__all__ = ["build_answer_prompt", "evidence_ids", "parse_model_answer"]
+__all__ = [
+    "EVIDENCE_MARKER",
+    "build_answer_prompt",
+    "evidence_ids",
+    "marker_for",
+    "parse_model_answer",
+]
