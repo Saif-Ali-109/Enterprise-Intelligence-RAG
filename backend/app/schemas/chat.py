@@ -28,10 +28,23 @@ class AskRequest(ApiModel):
     history: list[HistoryMessage] = Field(default_factory=list, max_length=10)
 
 
+"""
+ * One filter term as the filter builder emits it.
+ *
+ * Equality against one value, or a list of values — never an open object. The
+ * contract writes `applied_filters` as a bare object because the *shape of the
+ * index's filter language* is not this system's to declare; the terms it can
+ * actually contain are ours, and a bare `additionalProperties: true` in the
+ * generated schema would let any field into a response that a client reads
+ * (which `tests/contract/test_openapi_conformance.py` refuses, for that reason).
+"""
+FilterTerm = str | list[str] | None
+
+
 class SearchedScope(ApiModel):
     queries: list[str]
     products: list[str | None]
-    applied_filters: dict[str, Any] = Field(default_factory=dict)
+    applied_filters: dict[str, FilterTerm] = Field(default_factory=dict)
     candidates_retrieved: int = Field(ge=0)
     candidates_reranked: int = Field(ge=0)
     evidence_selected: int = Field(ge=0)

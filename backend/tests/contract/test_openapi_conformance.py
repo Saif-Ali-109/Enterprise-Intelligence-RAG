@@ -162,10 +162,13 @@ def _paths(document: dict[str, Any]) -> set[str]:
 #:   into a permanent excuse;
 #: - a task **missing** from this list fails (`test_every_contract_path_is_either
 #:   built_or_tracked`), so a new contract path cannot be quietly skipped.
+#: Contract paths with no implementation yet, and the task that owns them.
+#:
+#: `/chat` and `/chat/{request_id}` left this list on 2026-10-04 (T090), which is
+#: what `test_the_pending_list_contains_no_endpoint_that_already_works` exists to
+#: catch: an entry that no longer describes anything is a list nobody reads.
 _PENDING = {
-    "/chat": "T090",
     "/chat/stream": "T127",
-    "/chat/{request_id}": "T090",
     "/evaluations/dataset": "T148",
     "/evaluations/runs": "T148",
     "/evaluations/runs/{run_id}": "T148",
