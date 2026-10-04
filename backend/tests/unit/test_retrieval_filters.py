@@ -14,7 +14,9 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-def _analysis(product=None, category=None, intent=None, product_conf=0.0, category_conf=0.0, intent_conf=0.0):
+def _analysis(
+    product=None, category=None, intent=None, product_conf=0.0, category_conf=0.0, intent_conf=0.0
+):
     from app.retrieval.query_analyzer import QueryAnalysis
 
     return QueryAnalysis(

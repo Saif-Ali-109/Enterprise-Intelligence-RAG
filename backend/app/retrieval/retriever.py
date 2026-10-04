@@ -181,7 +181,15 @@ async def retrieve(
                 heading_path=list(unit.heading_path) if unit.heading_path is not None else [],
                 token_count=unit.token_count,
                 ordinal=unit.ordinal,
-                metadata=dict(metadata),
+                metadata={
+                    **metadata,
+                    # `unit_id` is the registry row — DocumentUnit.id — that a Citation
+                    # schema field expects, but retrieval metadata joins on vector_id.
+                    # Riding it through candidate metadata means every downstream
+                    # step can answer "which row of ours does this vector refer to"
+                    # without a second registry round trip.
+                    "unit_id": str(unit.id),
+                },
             )
         )
     return candidates

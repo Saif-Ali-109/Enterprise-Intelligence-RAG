@@ -30,7 +30,9 @@ def rewrite_queries(question: str, analysis: QueryAnalysis) -> list[str]:
     """
     if _has_detection_conjunction_issues(question, analysis):
         # A cross-product "X vs Y" question is two questions, one per side.
-        parts = [p.strip(" ?.!") for p in re.split(r"\bvs(?:\.|ersus)?\b", question, flags=re.IGNORECASE)]
+        parts = [
+            p.strip(" ?.!") for p in re.split(r"\bvs(?:\.|ersus)?\b", question, flags=re.IGNORECASE)
+        ]
         parts = [p for p in parts if p]
         if len(parts) == 2:
             return [parts[0] + "?", parts[1] + "?"]
@@ -51,7 +53,14 @@ def _conservative_split(question: str) -> list[str]:
     # Both halves must name a concrete imperative/surface verb before we call
     # them two asks — otherwise the conjunction is lexical ("rotate a token and
     # revoke it" is one instruction).
-    if all(re.search(r"\b(how|what|why|where|which|when|is|are|can|do|does|update|create|delete|add|remove|filter|search|export|rotate|configure|set|install)\b", c, re.IGNORECASE) for c in bound_clauses):
+    if all(
+        re.search(
+            r"\b(how|what|why|where|which|when|is|are|can|do|does|update|create|delete|add|remove|filter|search|export|rotate|configure|set|install)\b",
+            c,
+            re.IGNORECASE,
+        )
+        for c in bound_clauses
+    ):
         return [c + "?" for c in bound_clauses]
     return [question.strip()]
 

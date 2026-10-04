@@ -15,11 +15,12 @@ asks for it on the request; no reasoning is attached ever.
 
 from __future__ import annotations
 
-import json
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.errors import ProviderError
@@ -28,13 +29,11 @@ from app.generation.provider import LLMProvider
 from app.generation.verifier import verify_answer
 from app.retrieval.citations import EvidenceSource, validate_citations
 from app.retrieval.evidence import select_evidence
-from app.retrieval.query_analyzer import analyze_question, QueryAnalysis
+from app.retrieval.query_analyzer import analyze_question
 from app.retrieval.query_rewriter import rewrite_queries
 from app.retrieval.reranker import RerankCandidate, RerankedHit, Reranker
 from app.retrieval.retriever import build_metadata_filter, retrieve
 from app.retrieval.vector_store import VectorStore
-
-from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @dataclass(slots=True)
@@ -117,7 +116,6 @@ async def run_chat(
             "category": analysis.classification_confidence.get("category", 0.0),
             "intent": analysis.classification_confidence.get("intent", 0.0),
         },
-        "entities": analysis.entities,
         "rewrite_queries": rewrite_queries(question, analysis),
     }
 
@@ -152,9 +150,6 @@ async def run_chat(
         candidates=rerank_input,
         top_n=settings.retrieval_rerank_top_n,
     )
-    # Pair rewrite-generation with registry rows by id.
-    by_id = {c.id: c for c in all_candidates}
-    hydrated = [by_id[h.id] for h in reranked if h.id in by_id]
     stages_ms["rerank_ms"] = int((time.perf_counter() - t0) * 1000)
 
     # ── 4. select evidence ---------------------------------------------------
@@ -237,7 +232,9 @@ async def run_chat(
             stages_ms=stages_ms,
         )
 
-    if (verification is None and not generated.answerable) or (verification is not None and verification.classification == "UNSUPPORTED"):
+    if (verification is None and not generated.answerable) or (
+        verification is not None and verification.classification == "UNSUPPORTED"
+    ):
         # The model said the evidence does not support an answer, and the
         # verifier agreed after the cap: the honest response is a refusal, not a
         # softly-phrased paragraph that still reads as an answer.
@@ -274,7 +271,7 @@ async def run_chat(
         EvidenceSource(
             evidence_id=u.hit.id,
             document_id=u.document_id,
-            unit_id=u.document_id if isinstance(u.document_id, str) else str(u.document_id),
+            unit_id=u.unit_id or u.hit.metadata.get("unit_id", ""),
             source_url=u.hit.metadata.get("source_url", ""),
             title=u.hit.metadata.get("title", ""),
             product=u.hit.metadata.get("product"),
@@ -290,7 +287,9 @@ async def run_chat(
     validation = validate_citations(
         cited_ids,
         retrieved=evidence_sources,
-        cited_links=[{"evidence_id": c.evidence_id, "source_url": c.source_url} for c in generated.citations],
+        cited_links=[
+            {"evidence_id": c.evidence_id, "source_url": c.source_url} for c in generated.citations
+        ],
     )
 
     citations_payload = [

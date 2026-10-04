@@ -94,9 +94,10 @@ class AskResponse(ApiModel):
     question: str
     outcome: Literal["answered", "refused"]
     answer: str | None = None
-    refusal_reason: Literal[
-        "INSUFFICIENT_EVIDENCE", "UNSUPPORTED_INTENT", "TOO_AMBIGUOUS", "GENERATION_FAILED"
-    ] | None = None
+    refusal_reason: (
+        Literal["INSUFFICIENT_EVIDENCE", "UNSUPPORTED_INTENT", "TOO_AMBIGUOUS", "GENERATION_FAILED"]
+        | None
+    ) = None
     searched: SearchedScope | None = None
     leads: list[Lead] = Field(default_factory=list)
     citations: list[CitationOut] = Field(default_factory=list)

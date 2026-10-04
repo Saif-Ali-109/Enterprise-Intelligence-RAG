@@ -23,7 +23,11 @@ class _Fake:
 
     async def classify(self, *, system, user):
         self.n_calls += 1
-        value = self._outcomes.pop(0) if self._outcomes else {"classification": "UNSUPPORTED", "reason": "none left"}
+        value = (
+            self._outcomes.pop(0)
+            if self._outcomes
+            else {"classification": "UNSUPPORTED", "reason": "none left"}
+        )
         if isinstance(value, Exception):
             raise value
         return value
@@ -41,7 +45,9 @@ class TestVerdicts:
         from app.generation.verifier import verify_answer
 
         provider = _Fake([{"classification": "SUPPORTED", "reason": "evidence texts match"}])
-        result = await verify_answer("Boards track work.", evidence_text="Boards track work.", provider=provider)
+        result = await verify_answer(
+            "Boards track work.", evidence_text="Boards track work.", provider=provider
+        )
         assert result.classification == "SUPPORTED"
 
     @pytest.mark.asyncio
@@ -49,7 +55,11 @@ class TestVerdicts:
         from app.generation.verifier import verify_answer
 
         provider = _Fake([{"classification": "UNSUPPORTED", "reason": "no such fact in evidence"}])
-        result = await verify_answer("You need a Jira Data Center license for this.", evidence_text="Boards track work.", provider=provider)
+        result = await verify_answer(
+            "You need a Jira Data Center license for this.",
+            evidence_text="Boards track work.",
+            provider=provider,
+        )
         assert result.classification == "UNSUPPORTED"
 
     @pytest.mark.asyncio
@@ -69,10 +79,12 @@ class TestCap:
     async def test_second_attempt_is_the_last(self) -> None:
         from app.generation.verifier import verify_answer
 
-        provider = _Fake([
-            {"classification": "UNSUPPORTED", "reason": "invented"},
-            {"classification": "UNSUPPORTED", "reason": "still invented"},
-        ])
+        provider = _Fake(
+            [
+                {"classification": "UNSUPPORTED", "reason": "invented"},
+                {"classification": "UNSUPPORTED", "reason": "still invented"},
+            ]
+        )
         # A loop-worded candidate would retry forever; the verifier is one
         # evaluation. The *cap* lives with the caller (generate_verified_answer).
         await verify_answer("bad", evidence_text="good", provider=provider)

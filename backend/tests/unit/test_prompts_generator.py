@@ -19,9 +19,17 @@ def _evidence():
         retrieval_score=0.6,
         rerank_score=0.7,
         rank=1,
-        metadata={"source_url": "https://support.atlassian.com/api-tokens", "title": "Manage API tokens", "product": "jira"},
+        metadata={
+            "source_url": "https://support.atlassian.com/api-tokens",
+            "title": "Manage API tokens",
+            "product": "jira",
+        },
     )
-    return [EvidenceUnit(hit=hit, document_id="d1", source_id="s1", category="api-tokens", page_type="doc")]
+    return [
+        EvidenceUnit(
+            hit=hit, document_id="d1", source_id="s1", category="api-tokens", page_type="doc"
+        )
+    ]
 
 
 class _Fake:
@@ -98,7 +106,13 @@ class TestGenerator:
                     {
                         "answer": "Rotate a token.",
                         "answerable": True,
-                        "citations": [{"evidence_id": "ev-1", "source_url": "https://support.atlassian.com/api-tokens", "quote": "To rotate a token…"}],
+                        "citations": [
+                            {
+                                "evidence_id": "ev-1",
+                                "source_url": "https://support.atlassian.com/api-tokens",
+                                "quote": "To rotate a token…",
+                            }
+                        ],
                     }
                 )
             ]

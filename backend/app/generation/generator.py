@@ -55,13 +55,23 @@ def _parse(blob: str, *, attempts: int) -> GeneratedAnswer:
         source_url = item.get("source_url")
         quote = item.get("quote")
         if not isinstance(evidence_id, str) or not evidence_id:
-            raise ProviderError(f"generation returned a citation without an evidence_id (attempt {attempts})")
+            raise ProviderError(
+                f"generation returned a citation without an evidence_id (attempt {attempts})"
+            )
         # Source_url is recorded as asked, but the citation validator (T085) is
         # what *resolves* it via the registry — the generator's job is to
         # refuse to invent. The link itself is checked there, not here.
-        parsed_citations.append(ModelCitation(evidence_id=evidence_id, source_url=str(source_url or ""), quote=quote if isinstance(quote, str) else None))
+        parsed_citations.append(
+            ModelCitation(
+                evidence_id=evidence_id,
+                source_url=str(source_url or ""),
+                quote=quote if isinstance(quote, str) else None,
+            )
+        )
 
-    return GeneratedAnswer(answer=answer, answerable=answerable, citations=parsed_citations, raw=parsed)
+    return GeneratedAnswer(
+        answer=answer, answerable=answerable, citations=parsed_citations, raw=parsed
+    )
 
 
 async def generate_answer(

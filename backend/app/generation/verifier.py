@@ -52,7 +52,9 @@ async def verify_answer(answer: str, *, evidence_text: str, provider: LLMProvide
     # Not strictly a dict by the type's own contract, but the boundary is where
     # malformed output is expected in tests, hence:
     if not isinstance(outcome, dict):
-        return Verification(classification="UNSUPPORTED", reason="verifier response malformed", raw={})
+        return Verification(
+            classification="UNSUPPORTED", reason="verifier response malformed", raw={}
+        )
 
     classification = outcome.get("classification")
     if classification not in {"SUPPORTED", "UNSUPPORTED", "PARTIAL"}:

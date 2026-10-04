@@ -113,9 +113,11 @@ def select_evidence(
         )
         return EvidenceUnit(
             hit=h,
-            unit_id=getattr(registry, "unit_id", "") or "",
-            document_id=getattr(registry, "document_id", "") or "",
-            source_id=getattr(registry, "source_id", "") or "",
+            unit_id=getattr(registry, "unit_id", "") or h.metadata.get("unit_id", "") or "",
+            document_id=getattr(registry, "document_id", "")
+            or h.metadata.get("document_id", "")
+            or "",
+            source_id=getattr(registry, "source_id", "") or h.metadata.get("source_id", "") or "",
             category=getattr(registry, "category", None),
             page_type=getattr(registry, "page_type", None),
             heading_path=heading_path,
