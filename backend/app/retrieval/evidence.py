@@ -13,7 +13,7 @@ rather than a property any later code can silently drop.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Literal, Protocol
 
 from app.retrieval.reranker import RerankedHit
 
@@ -168,4 +168,131 @@ def select_evidence(
     return accepted
 
 
-__all__ = ["EvidenceUnit", "select_evidence"]
+# ============================================================================
+# The quality gate and the leads (T101, T104 / FR-007, FR-008)
+# ============================================================================
+
+#: Which floor refused, as a code. The prose lives in one place per client and
+#: in the refusal view; a reason string here would be parsed by both.
+RefusalReason = Literal["BELOW_MIN_RERANK_SCORE", "BELOW_MIN_EVIDENCE_SCORE"]
+
+#: The share of the pool's best score below which a hit is noise rather than a
+#: weak lead. See `build_leads` for why this is a fraction and not a constant.
+LEAD_FLOOR_FRACTION = 0.25
+
+
+class _Thresholds(Protocol):
+    """The two settings the gate reads. A test can hold its own values."""
+
+    min_rerank_score: float | None
+    min_evidence_score: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class QualityDecision:
+    """Whether this pool may be answered from at all, and why not.
+
+    `best_score` is reported even when the decision is to refuse: it is what an
+    operator needs in order to choose between rephrasing the question and
+    lowering the floor.
+    """
+
+    refused: bool
+    reason: RefusalReason | None
+    best_score: float
+    weakest_selected: float
+
+
+def gate_evidence(
+    hits: list[RerankedHit],
+    *,
+    thresholds: _Thresholds,
+    selected: list[EvidenceUnit] | None = None,
+) -> QualityDecision:
+    """Refuse a pool whose evidence cannot support an answer (FR-007).
+
+    Two floors, read from configuration, and neither defaulted to a number:
+
+    * `min_rerank_score` judges the **best** unit in the pool. Not the average
+      and not the median: an average lets five irrelevant passages launder one
+      relevant one into a passing score, and the answer would then be supported
+      by the passage that was not relevant.
+    * `min_evidence_score` judges the **weakest unit in the set that would be
+      answered from** — the selected set, not the pool. An answer built from
+      three strong units and one useless one is an answer with a useless claim
+      in it, and the mean of those four hides exactly that.
+
+    An empty pool refuses under both readings, with the rerank floor's reason:
+    there is no best score to weigh, and "nothing retrieved" is the retrieval
+    floor's failure in the first place.
+    """
+    best = max((h.rerank_score for h in hits), default=0.0)
+    weakest = min((u.rerank_score for u in (selected or [])), default=best)
+
+    rerank_floor = thresholds.min_rerank_score
+    if rerank_floor is not None and (not hits or best < rerank_floor):
+        return QualityDecision(True, "BELOW_MIN_RERANK_SCORE", best, weakest)
+
+    evidence_floor = thresholds.min_evidence_score
+    if evidence_floor is not None and (not selected or weakest < evidence_floor):
+        return QualityDecision(True, "BELOW_MIN_EVIDENCE_SCORE", best, weakest)
+
+    return QualityDecision(False, None, best, weakest)
+
+
+def build_leads(
+    hits: list[RerankedHit],
+    *,
+    limit: int = 3,
+    floor: float | None = None,
+) -> list[dict[str, Any]]:
+    """Weakly related sources, as leads. Never as answers (FR-008).
+
+    Every lead carries `insufficient: True` as a literal, so a client cannot
+    render one as support even by accident — and the field is in the contract for
+    that reason rather than for decoration.
+
+    `floor` defaults to a fraction of the best score in the pool rather than to a
+    constant: what counts as "weakly related" is relative to what the index
+    thought was relevant at all, and a fixed number either floods the list on a
+    strong question or empties it on a weak one. A hit with no publisher page is
+    never offered — a lead the reader cannot check is noise with the shape of a
+    URL.
+    """
+    if not hits or limit <= 0:
+        return []
+
+    best = max(h.rerank_score for h in hits)
+    threshold = best * LEAD_FLOOR_FRACTION if floor is None else floor
+
+    leads: list[dict[str, Any]] = []
+    for hit in sorted(hits, key=lambda h: (-h.rerank_score, h.rank)):
+        if len(leads) >= limit:
+            break
+        if hit.rerank_score < threshold:
+            continue
+        metadata = hit.metadata or {}
+        source_url = str(metadata.get("source_url") or "")
+        if not source_url:
+            continue
+        leads.append(
+            {
+                "source_url": source_url,
+                "title": str(metadata.get("title") or "Untitled page"),
+                "heading_path": list(metadata.get("heading_path") or []),
+                "relevance": hit.rerank_score,
+                "insufficient": True,
+            }
+        )
+    return leads
+
+
+__all__ = [
+    "EvidenceUnit",
+    "LEAD_FLOOR_FRACTION",
+    "QualityDecision",
+    "RefusalReason",
+    "build_leads",
+    "gate_evidence",
+    "select_evidence",
+]

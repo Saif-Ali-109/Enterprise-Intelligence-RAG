@@ -12,11 +12,11 @@
  * be made.
  *
  * **A refusal is a first-class state, not an error.** `POST /chat` answers a
- * refusal with HTTP 200, so this panel renders it from the same success path, in
- * its own region, with what was searched and any clearly-labelled leads. Only a
- * genuine fault (5xx, unreachable service, a cancelled request) reaches the error
- * region, and that region names the request id so the failure can be found in a
- * log (Principle II).
+ * refusal with HTTP 200, so this panel renders it from the same success path and
+ * hands it to `refusal-panel`, which has its own region and no error wording. Only
+ * a genuine fault (5xx, unreachable service, a cancelled request) reaches
+ * `unavailable-panel`, which names the request id so the failure can be found in a
+ * log and in its `query_logs` row (Principle II).
  *
  * **Progress is announced once, in words.** A question takes seconds because
  * retrieval and reranking are the slow parts; the panel says which stage it is in
@@ -31,9 +31,11 @@
  * answers `NOT_FOUND`, so it cannot.
  */
 import { useState } from "react";
-import { describeError, type AskResponse } from "@/lib/api-client";
-import { QUESTION_MAX_LENGTH, describeRefusal, useAsk } from "@/hooks/useChat";
+import type { AskResponse } from "@/lib/api-client";
+import { QUESTION_MAX_LENGTH, useAsk } from "@/hooks/useChat";
 import { CitationList } from "@/components/chat/citation-list";
+import { RefusalPanel } from "@/components/chat/refusal-panel";
+import { UnavailablePanel } from "@/components/chat/unavailable-panel";
 import { Textarea } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -125,19 +127,7 @@ export function ChatPanel() {
           </p>
         ) : null}
 
-        {ask.isError ? (
-          <Card labelledBy="ask-error-heading">
-            <CardHeader>
-              <CardTitle id="ask-error-heading">The question could not be completed</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm">{describeError(ask.error)}</p>
-              <p className="mt-2 text-xs text-muted-foreground">
-                No answer was returned, and nothing was substituted for one.
-              </p>
-            </CardContent>
-          </Card>
-        ) : null}
+        {ask.isError ? <UnavailablePanel error={ask.error} /> : null}
 
         {response !== null ? <AnswerRegion response={response} /> : null}
       </div>
@@ -148,13 +138,14 @@ export function ChatPanel() {
 /**
  * One response, rendered.
  *
- * Split from `ChatPanel` so the three states — answered, refused, faulted — are
- * separate code with no shared branch that could render an answer without its
- * citations.
+ * Split from `ChatPanel` so the two outcomes are separate code with no shared
+ * branch that could render an answer without its citations: the refusal goes
+ * straight to `RefusalPanel`, and only the answered branch reaches the answer
+ * text *and* the citation list below it.
  */
 function AnswerRegion({ response }: { response: AskResponse }) {
   if (response.outcome === "refused") {
-    return <RefusalRegion response={response} />;
+    return <RefusalPanel response={response} />;
   }
 
   return (
@@ -170,8 +161,8 @@ function AnswerRegion({ response }: { response: AskResponse }) {
       <CardContent>
         {/*
           `answer` is non-null exactly when `outcome` is `answered`; the fallback
-          sentence exists so a malformed response cannot render an empty box
-          that reads as "nothing to say".
+          sentence exists so a malformed response cannot render an empty box that
+          reads as "nothing to say".
         */}
         <p className="whitespace-pre-wrap text-sm leading-relaxed">
           {response.answer ?? "The service returned an answer with no text."}
@@ -183,82 +174,6 @@ function AnswerRegion({ response }: { response: AskResponse }) {
             emptyMessage="This answer arrived with no citations, which is a defect in the service rather than a source-free answer."
           />
         </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-/**
- * A refusal, rendered as a refusal (FR-008).
- *
- * It says what was searched — the queries, the products, the candidates found —
- * because "the system would not answer" without that is a dead end, and it offers
- * weakly related sources as *leads*, each already carrying `insufficient: true` so
- * nothing here can be mistaken for support for a claim.
- */
-function RefusalRegion({ response }: { response: AskResponse }) {
-  const searched = response.searched;
-
-  return (
-    <Card labelledBy="refusal-heading">
-      <CardHeader>
-        <CardTitle id="refusal-heading">Not answered</CardTitle>
-        <p className="text-sm">{describeRefusal(response.refusal_reason)}</p>
-      </CardHeader>
-      <CardContent>
-        <p className="text-sm">
-          {`Asked: ${response.question}`}
-          <span aria-hidden="true"> · </span>
-          {`request ${response.request_id}`}
-        </p>
-
-        {searched ? (
-          <dl className="mt-4 grid gap-2 text-xs">
-            <div className="grid gap-0.5">
-              <dt className="font-medium">Searched</dt>
-              <dd className="text-muted-foreground">{searched.queries.join(" · ")}</dd>
-            </div>
-            <div className="grid gap-0.5">
-              <dt className="font-medium">Products considered</dt>
-              <dd className="text-muted-foreground">
-                {searched.products.filter((p): p is string => p !== null).join(", ") || "none identified"}
-              </dd>
-            </div>
-            <div className="grid gap-0.5">
-              <dt className="font-medium">Evidence found</dt>
-              <dd className="text-muted-foreground">
-                {`${searched.candidates_retrieved} candidates retrieved, ${searched.candidates_reranked} reranked, ${searched.evidence_selected} selected`}
-              </dd>
-            </div>
-          </dl>
-        ) : null}
-
-        {response.leads.length > 0 ? (
-          <div className="mt-4 grid gap-2">
-            <h3 className="text-sm font-medium">Possibly related, not sufficient</h3>
-            <ul className="grid gap-2">
-              {response.leads.map((lead) => (
-                <li key={lead.source_url} className="text-xs">
-                  <a
-                    href={lead.source_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="underline underline-offset-4 hover:no-underline"
-                  >
-                    {lead.title}
-                  </a>
-                  <span className="ml-2 text-muted-foreground">
-                    {lead.insufficient ? "not sufficient for this question" : ""}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-
-        <p className="mt-4 text-xs text-muted-foreground">
-          A refusal is a result, not a failure: nothing was guessed in its place.
-        </p>
       </CardContent>
     </Card>
   );

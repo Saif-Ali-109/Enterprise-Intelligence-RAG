@@ -16,24 +16,29 @@ asks for it on the request; no reasoning is attached ever.
 from __future__ import annotations
 
 import time
-import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.chat.audit import record_query
 from app.core.config import get_settings
-from app.core.errors import ProviderError
+from app.core.errors import AppError, ProviderError
+from app.core.logging import get_request_id, new_request_id
 from app.generation.generator import generate_answer
 from app.generation.provider import LLMProvider
 from app.generation.verifier import verify_answer
 from app.retrieval.citations import EvidenceSource, validate_citations
-from app.retrieval.evidence import select_evidence
+from app.retrieval.evidence import build_leads, gate_evidence, select_evidence
 from app.retrieval.query_analyzer import analyze_question
 from app.retrieval.query_rewriter import rewrite_queries
 from app.retrieval.reranker import RerankCandidate, RerankedHit, Reranker
 from app.retrieval.retriever import build_metadata_filter, retrieve, should_widen
 from app.retrieval.vector_store import VectorStore
+
+#: How many weakly related sources a refusal may offer (FR-008). Three, because
+#: a list of ten is a search result page, not a hint.
+LEAD_LIMIT = 3
 
 
 @dataclass(slots=True)
@@ -89,8 +94,85 @@ async def run_chat(
     inspect: bool = False,
     started_unix: float | None = None,
 ) -> ChatResult:
+    """The one place an `AskResponse` is assembled, audited on every path (FR-048).
+
+    The wrapper exists so that *every* exit is recorded: the answer, the
+    refusal, and the error. The failure path is the one most worth recording and
+    the one a pipeline is most likely to skip, because it leaves by exception
+    rather than by `return` — and an outage with no rows is an outage nobody can
+    investigate afterwards.
+    """
+    # The request's own id, not a fresh one. FR-047: the value a user quotes in
+    # a bug report is the same value that joins the report to the audit record
+    # and to the log line — so the error envelope, the `query_logs` row and the
+    # log records must all carry it. Minting a second id here produced exactly
+    # the split that made a recorded outage untraceable by its own request id,
+    # which `test_vector_outage.py` found by looking the id up and not finding it.
+    request_id = get_request_id() or new_request_id()
+    started = time.perf_counter() if started_unix is None else started_unix
+    try:
+        result = await _answer(
+            question,
+            session=session,
+            store=store,
+            provider=provider,
+            reranker=reranker,
+            inspect=inspect,
+            started_unix=started_unix,
+            request_id=request_id,
+        )
+    except AppError as exc:
+        await record_query(
+            session,
+            request_id=request_id,
+            question=question,
+            outcome="error",
+            error_code=exc.code.value,
+            total_latency_ms=int((time.perf_counter() - started) * 1000),
+        )
+        raise
+
+    payload = result.payload
+    analysis_payload = payload.get("query_analysis") or {}
+    searched = payload.get("searched") or {}
+    await record_query(
+        session,
+        request_id=request_id,
+        question=question,
+        outcome=payload["outcome"],
+        answer=payload.get("answer"),
+        refusal_reason=payload.get("refusal_reason"),
+        detected_product=analysis_payload.get("detected_product"),
+        detected_category=analysis_payload.get("detected_category"),
+        intent=analysis_payload.get("intent"),
+        classification_confidence=analysis_payload.get("confidence"),
+        rewrite_queries=analysis_payload.get("rewrite_queries"),
+        applied_filters=searched.get("applied_filters"),
+        candidates_retrieved=searched.get("candidates_retrieved", 0),
+        candidates_reranked=searched.get("candidates_reranked", 0),
+        evidence_selected=searched.get("evidence_selected", 0),
+        stage_latency_ms=result.stages_ms,
+        total_latency_ms=payload["timing"]["total_ms"],
+        provider="groq",
+        model=get_settings().groq_model,
+        rerank_model=get_settings().pinecone_rerank_model,
+        pipeline_trace=payload.get("trace"),
+    )
+    return result
+
+
+async def _answer(
+    question: str,
+    *,
+    session: AsyncSession,
+    store: VectorStore,
+    provider: LLMProvider,
+    reranker: Reranker | None,
+    inspect: bool,
+    started_unix: float | None,
+    request_id: str,
+) -> ChatResult:
     settings = get_settings()
-    request_id = str(uuid.uuid4())
     started = time.perf_counter() if started_unix is None else started_unix
     stages_ms: dict[str, int] = {}
     trace: dict[str, Any] = {}
@@ -168,7 +250,12 @@ async def run_chat(
     )
     stages_ms["select_ms"] = int((time.perf_counter() - t0) * 1000)
 
-    if not evidence:
+    # ── 4b. the quality gate (FR-007) ------------------------------------------
+    # The refusal lives here, *before* generation, which is the point: a pool
+    # that cannot support an answer is never shown to the model, so there is
+    # nothing for the model to be tempted into filling.
+    decision = gate_evidence(reranked, thresholds=settings, selected=evidence)
+    if not evidence or decision.refused:
         return _refused(
             request_id=request_id,
             question=question,
@@ -179,9 +266,9 @@ async def run_chat(
                 "applied_filters": applied_filters,
                 "candidates_retrieved": len(all_candidates),
                 "candidates_reranked": len(reranked),
-                "evidence_selected": 0,
+                "evidence_selected": len(evidence),
             },
-            leads=[],
+            leads=build_leads(reranked, limit=LEAD_LIMIT),
             total_ms=int((time.perf_counter() - started) * 1000),
             trace=trace if inspect else None,
             query_analysis=query_analysis_payload,

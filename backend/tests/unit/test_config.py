@@ -560,6 +560,7 @@ class TestRetrievalBudgetChain:
 
         from app.chat import service
 
-        source = inspect.getsource(service.run_chat)
+        # The budget is read inside `_answer`, which `run_chat` wraps for audit.
+        source = inspect.getsource(service._answer)
         assert "settings.retrieval_rerank_top_n" in source
         assert "top_n=6" not in source
