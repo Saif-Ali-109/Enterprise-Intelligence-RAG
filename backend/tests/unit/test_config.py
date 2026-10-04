@@ -498,3 +498,68 @@ class TestEnvListParsing:
         settings = Settings(_env_file=None)  # type: ignore[call-arg]
         assert "confluence.atlassian.com" in settings.allowed_domains
         assert settings.cors_origins == ["http://localhost:3000"]
+
+
+class TestRetrievalBudgetChain:
+    """T083 / FR-019, FR-020, Principle VIII: 12 -> 6 -> 3-6, enforced as configuration.
+
+    The rerank stage is the one that pays for a second model call, so its budget
+    is the one an operator most needs to be able to see and bound. Enforcement is
+    three separate things, and each is pinned where it lives:
+
+    * the defaults are the declared triple, so a fresh install reproduces it;
+    * an inconsistent chain refuses to start rather than running a stage whose
+      output the next stage cannot use;
+    * the reranker clamps `top_n` to the candidates it was given
+      (`test_vendor_adapters.py::TestRerankResponseHandling`).
+
+    The service reads the value from settings on every call — there is no literal
+    `6` in the chat path for a test to patch around.
+    """
+
+    def test_the_default_chain_is_twelve_six_three_to_six(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.core.config import Settings
+
+        for name in (
+            "RETRIEVAL_CANDIDATE_POOL",
+            "RETRIEVAL_RERANK_TOP_N",
+            "EVIDENCE_MIN_UNITS",
+            "EVIDENCE_MAX_UNITS",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert settings.retrieval_candidate_pool == 12
+        assert settings.retrieval_rerank_top_n == 6
+        assert (settings.evidence_min_units, settings.evidence_max_units) == (3, 6)
+
+    def test_a_rerank_budget_larger_than_the_pool_refuses_to_start(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.core.config import Settings
+
+        monkeypatch.setenv("RETRIEVAL_CANDIDATE_POOL", "4")
+        monkeypatch.setenv("RETRIEVAL_RERANK_TOP_N", "6")
+        with pytest.raises(ValueError, match="retrieval_rerank_top_n"):
+            Settings(_env_file=None)  # type: ignore[call-arg]
+
+    def test_evidence_wider_than_the_rerank_output_refuses_to_start(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.core.config import Settings
+
+        monkeypatch.setenv("RETRIEVAL_RERANK_TOP_N", "4")
+        monkeypatch.setenv("EVIDENCE_MAX_UNITS", "6")
+        with pytest.raises(ValueError, match="evidence_max_units|retrieval_rerank_top_n"):
+            Settings(_env_file=None)  # type: ignore[call-arg]
+
+    def test_the_chat_path_reads_the_budget_from_settings(self) -> None:
+        """No literal rerank budget in the service: one number, from config."""
+        import inspect
+
+        from app.chat import service
+
+        source = inspect.getsource(service.run_chat)
+        assert "settings.retrieval_rerank_top_n" in source
+        assert "top_n=6" not in source
