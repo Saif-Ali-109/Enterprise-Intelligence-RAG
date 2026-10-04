@@ -9,9 +9,11 @@ it to rewrite.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.core.config import get_settings
 from app.core.errors import ProviderError
 from app.generation.prompts import build_answer_prompt, parse_model_answer
 from app.generation.provider import LLMProvider
@@ -79,7 +81,8 @@ async def generate_answer(
     *,
     evidence: list[EvidenceUnit],
     provider: LLMProvider,
-    max_attempts: int = 2,
+    max_attempts: int | None = None,
+    retry_delay_seconds: float | None = None,
 ) -> GeneratedAnswer:
     """One grounded generation, retrying on a malformed response only.
 
@@ -89,7 +92,16 @@ async def generate_answer(
     is the *verifier's* loop, which asks the same cap question of the answer it
     received. We do not start that loop here, because a prompt that models what
     it should not do is itself evidence a verifier must see.
+
+    The pause between attempts is configuration (`GENERATION_RETRY_DELAY_SECONDS`)
+    rather than nothing at all: an immediate retry against a rate-limited
+    provider is the same request twice, and the cap then reads as "we tried
+    twice" when the truth is "we asked once and insisted".
     """
+    if max_attempts is None:
+        max_attempts = get_settings().generation_max_attempts
+    if retry_delay_seconds is None:
+        retry_delay_seconds = get_settings().generation_retry_delay_seconds
     if max_attempts < 1:
         raise ValueError("max_attempts must be >= 1")
 
@@ -97,12 +109,23 @@ async def generate_answer(
     last_error: ProviderError | None = None
     for attempt in range(1, max_attempts + 1):
         try:
-            completion = await provider.complete(system=system, user=user, json_mode=True)
+            # `json_mode` is deliberately **not** requested. Measured live on
+            # 2026-10-04: with constrained decoding on, Groq intermittently
+            # answers `400 invalid_request_error / json_validate_failed`
+            # ("Failed to validate JSON") on a prompt it accepted moments
+            # earlier, and the retry re-sends the identical prompt and meets the
+            # identical failure. Our own parser below is the contract
+            # enforcement point either way — a response that is not our shape is
+            # refused by code, deterministically — so the vendor's decoder was
+            # adding a failure mode and no guarantee.
+            completion = await provider.complete(system=system, user=user, json_mode=False)
             return _parse(completion.text, attempts=attempt)
         except ProviderError as exc:
             last_error = exc
             if attempt == max_attempts:
                 raise
+            if retry_delay_seconds > 0:
+                await asyncio.sleep(retry_delay_seconds)
     # Unreachable, but keeps the type checker and reader honest about the bound.
     raise last_error or ProviderError("generation failed without a recorded attempt")
 

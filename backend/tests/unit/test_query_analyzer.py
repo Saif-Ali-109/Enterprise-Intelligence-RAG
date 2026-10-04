@@ -214,6 +214,94 @@ class TestUnknownIsBetterThanForced:
         assert result.detected_product is None
 
 
+class TestCategoryVocabulary:
+    """A category the corpus cannot contain must not become a filter.
+
+    Measured on the first live retrieval run rather than anticipated: the
+    analyser answered `category: "api"` with 0.95 confidence, the extractor had
+    written `rest-api`, the filter matched nothing, and the pipeline refused a
+    question the crawled page answered. Confidence was never the issue.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_category_outside_the_corpus_vocabulary_is_unknown(self) -> None:
+        from app.retrieval.query_analyzer import analyze_question
+
+        result = await analyze_question(
+            "How do I create an issue with the Jira Cloud platform REST API?",
+            provider=_FakeProvider(
+                {
+                    "product": "jira",
+                    "category": "api",
+                    "intent": "how_to",
+                    "entities": ["issue"],
+                    "confidence": {
+                        "product": 0.99,
+                        "category": 0.95,
+                        "intent": 0.98,
+                        "entities": 0.9,
+                    },
+                }
+            ),
+        )
+        assert result.detected_category is None
+
+    @pytest.mark.asyncio
+    async def test_a_category_the_extractor_can_write_is_kept(self) -> None:
+        from app.retrieval.query_analyzer import analyze_question
+
+        result = await analyze_question(
+            "How do I create an issue?",
+            provider=_FakeProvider(
+                {
+                    "product": "jira",
+                    "category": "rest-api",
+                    "intent": "how_to",
+                    "entities": [],
+                    "confidence": {
+                        "product": 0.9,
+                        "category": 0.9,
+                        "intent": 0.9,
+                        "entities": 0.0,
+                    },
+                }
+            ),
+        )
+        assert result.detected_category == "rest-api"
+
+    def test_the_vocabulary_offered_is_the_one_the_extractor_writes(self) -> None:
+        """Both sides of the filter must read from one list, or this drifts again."""
+        from app.core.config import DocumentCategory
+        from app.ingestion.metadata import _CATEGORY_BY_SEGMENT
+
+        corpus_values = set(_CATEGORY_BY_SEGMENT.values())
+        assert corpus_values <= {m.value for m in DocumentCategory}
+
+    @pytest.mark.asyncio
+    async def test_the_prompt_names_the_vocabulary_it_will_be_held_to(self) -> None:
+        from app.core.config import DocumentCategory
+        from app.retrieval.query_analyzer import analyze_question
+
+        provider = _FakeProvider(
+            {
+                "product": "jira",
+                "category": "unknown",
+                "intent": "unknown",
+                "entities": [],
+                "confidence": {
+                    "product": 0.0,
+                    "category": 0.0,
+                    "intent": 0.0,
+                    "entities": 0.0,
+                },
+            }
+        )
+        await analyze_question("q", provider=provider)
+        system = provider.calls[0]["system"]
+        assert "rest-api" in system
+        assert all(m.value in system for m in DocumentCategory)
+
+
 class TestAnalyserMessage:
     @pytest.mark.asyncio
     async def test_question_is_passed_through_verbatim(self) -> None:

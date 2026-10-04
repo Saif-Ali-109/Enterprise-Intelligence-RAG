@@ -31,10 +31,18 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 # ============================================================================
 # Domain vocabulary
 # ============================================================================
-# These are the values that appear in the flat `product` and `category` metadata
-# fields, and in the classification prompt. They live here rather than in the
-# prompt or the filter builder because three modules have to agree on them, and
-# two copies of a domain list is one copy too many.
+# These are the values that appear in the flat `product`, `category` and
+# `page_type` metadata fields, and in the classification prompt. They live here
+# rather than in the prompt, the extractor, or the filter builder because those
+# modules have to agree on them, and two copies of a domain list is one copy too
+# many — and a third copy that has drifted is worse than either, because a
+# question's confident `category` then filters a corpus that cannot contain it.
+#
+# That drift is not hypothetical. `DocumentCategory` and `PageType` were added
+# after the first live retrieval run measured it: the analyser answered
+# `category: "api"` with 0.95 confidence, the extractor had written
+# `rest-api`, and the filter returned an empty candidate pool. A vocabulary the
+# corpus cannot satisfy is not a filter; it is a refusal with extra steps.
 
 
 class ProductDomain(StrEnum):
@@ -44,6 +52,24 @@ class ProductDomain(StrEnum):
     CONFLUENCE = "confluence"
     JSM = "jsm"
     DEVELOPER = "developer"
+
+
+class DocumentCategory(StrEnum):
+    """The categories a crawled page carries — `metadata.py`'s URL map, exactly.
+
+    Every value here is emitted by `_category_from_url`, including the two
+    low-confidence fallbacks (`general`, `root`): a page whose path matches
+    nothing is still indexed with the category it was judged to be, and a filter
+    vocabulary that omits those values would treat their documents as
+    unfilterable rather than as categorised.
+    """
+
+    REST_API = "rest-api"
+    USER_DOCUMENTATION = "user-documentation"
+    ADMINISTRATION = "administration"
+    DEVELOPER = "developer"
+    GENERAL = "general"
+    ROOT = "root"
 
 
 class QuestionIntent(StrEnum):
@@ -58,14 +84,19 @@ class QuestionIntent(StrEnum):
 
 
 class PageType(StrEnum):
-    """The filterable page classification (FR-024)."""
+    """The filterable page classification (FR-024) — the extractor's values.
 
+    This list was `guide | reference | tutorial | faq | troubleshooting | api`
+    while `_page_type` in `metadata.py` wrote `api_reference | how_to | concept
+    | guide`. Nothing read the enum, so nothing failed; the drift would have
+    surfaced as a `page_type` filter that matched an empty set for every page in
+    the corpus. The four the extractor can write are therefore the four here.
+    """
+
+    API_REFERENCE = "api_reference"
+    HOW_TO = "how_to"
+    CONCEPT = "concept"
     GUIDE = "guide"
-    REFERENCE = "reference"
-    TUTORIAL = "tutorial"
-    FAQ = "faq"
-    TROUBLESHOOTING = "troubleshooting"
-    API = "api"
     UNKNOWN = "unknown"
 
 
@@ -228,6 +259,12 @@ class Settings(BaseSettings):
     # A hard cap, not a loop bound. Regeneration stops at this many attempts
     # and the last answer is verified and reported as found (FR-011).
     generation_max_attempts: int = 2
+    # The pause between those attempts. Not politeness: the second attempt is
+    # only different if the first failed for a reason that can pass — a rate
+    # limit, a dropped connection. Measured on 2026-10-04: two live questions
+    # in a row, the second refused with GENERATION_FAILED because the retry
+    # reached the provider inside the same second and met the same limit.
+    generation_retry_delay_seconds: float = 1.5
     question_max_length: int = 2000
 
     # A cost control, not the FR-034 control, and the distinction is measured
@@ -587,6 +624,7 @@ def reset_settings() -> None:
 
 __all__ = [
     "PageType",
+    "DocumentCategory",
     "ProductDomain",
     "QuestionIntent",
     "SecretPresence",

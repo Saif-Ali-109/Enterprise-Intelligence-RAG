@@ -88,3 +88,31 @@ class TestFilterConstruction:
         assert plan.reason in ("confident", "narrowed")
         plan2 = build_metadata_filter(_analysis())
         assert plan2.reason in ("low_confidence", "disabled")
+
+
+class TestWidening:
+    """FR-010's other arm: an empty *filtered* pool is re-run wide, once.
+
+    The first live retrieval run measured this rather than theorising it: a
+    0.99-confidence product and a 0.95-confidence category produced zero
+    candidates and a refusal for a page that answered the question. Confidence
+    gates the filter; emptiness is what widens it.
+    """
+
+    def test_a_filtered_search_that_found_nothing_widens(self) -> None:
+        from app.retrieval.retriever import build_metadata_filter, should_widen
+
+        plan = build_metadata_filter(_analysis(product="jira", product_conf=0.99))
+        assert should_widen(plan, []) is True
+
+    def test_an_already_wide_search_that_found_nothing_does_not_widen(self) -> None:
+        from app.retrieval.retriever import build_metadata_filter, should_widen
+
+        plan = build_metadata_filter(_analysis())  # suppressed: nothing to widen
+        assert should_widen(plan, []) is False
+
+    def test_a_filtered_search_that_found_something_does_not_widen(self) -> None:
+        from app.retrieval.retriever import build_metadata_filter, should_widen
+
+        plan = build_metadata_filter(_analysis(product="jira", product_conf=0.99))
+        assert should_widen(plan, [object()]) is False

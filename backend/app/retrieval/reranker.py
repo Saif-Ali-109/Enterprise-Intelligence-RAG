@@ -238,6 +238,20 @@ class PineconeReranker:
             rank_fields=["text"],
             return_documents=False,
             top_n=effective_top_n,
+            # Measured 2026-10-04 against the live service: with a 1000-token unit
+            # and a one-line question the service answers
+            #
+            #   400 INVALID_ARGUMENT Request contains a query+document pair with
+            #   3157 tokens, which exceeds the maximum token limit of 1024 for
+            #   each query+document pair. Consider setting "parameters.truncate"
+            #   to "END" to truncate long query+document pairs.
+            #
+            # The chunker's upper bound is 1000 tokens and the query adds to it,
+            # so *every* question about a maximum-size unit would fail the whole
+            # request — a refusal caused by a document's length, not its
+            # content. Truncating at the end keeps the beginning of the unit,
+            # which is where a heading and its first paragraph live.
+            parameters={"truncate": "END"},
         )
 
         return self._hits_from(result, usable, effective_top_n)

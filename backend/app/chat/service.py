@@ -32,7 +32,7 @@ from app.retrieval.evidence import select_evidence
 from app.retrieval.query_analyzer import analyze_question
 from app.retrieval.query_rewriter import rewrite_queries
 from app.retrieval.reranker import RerankCandidate, RerankedHit, Reranker
-from app.retrieval.retriever import build_metadata_filter, retrieve
+from app.retrieval.retriever import build_metadata_filter, retrieve, should_widen
 from app.retrieval.vector_store import VectorStore
 
 
@@ -123,16 +123,22 @@ async def run_chat(
     t0 = time.perf_counter()
     rewrites = rewrite_queries(question, analysis)
     all_candidates = []
+    plan = build_metadata_filter(analysis)
+    widened = False
     for rq in rewrites:
-        all_candidates.extend(
-            await retrieve(
-                rq,
-                session=session,
-                store=store,
-                analysis=analysis,
-            )
-        )
+        found = await retrieve(rq, session=session, store=store, analysis=analysis)
+        if should_widen(plan, found):
+            # A confident filter that matches nothing is a filter that hid the
+            # evidence, and FR-010's reasoning — a too-narrow filter silently
+            # removes what a good answer needs — does not care how sure the
+            # classifier was. So the search is repeated once, wide, and the
+            # response reports the widened scope rather than the intended one.
+            widened = True
+            plan = build_metadata_filter(None)
+            found = await retrieve(rq, session=session, store=store, analysis=None)
+        all_candidates.extend(found)
     stages_ms["retrieve_ms"] = int((time.perf_counter() - t0) * 1000)
+    applied_filters = {} if widened or plan.suppressed else (plan.filter or {})
 
     # ── 3. rerank ----------------------------------------------------------
     t0 = time.perf_counter()
@@ -163,7 +169,6 @@ async def run_chat(
     stages_ms["select_ms"] = int((time.perf_counter() - t0) * 1000)
 
     if not evidence:
-        plan = build_metadata_filter(analysis)
         return _refused(
             request_id=request_id,
             question=question,
@@ -171,7 +176,7 @@ async def run_chat(
             searched={
                 "queries": rewrites,
                 "products": [analysis.detected_product],
-                "applied_filters": plan.filter or {},
+                "applied_filters": applied_filters,
                 "candidates_retrieved": len(all_candidates),
                 "candidates_reranked": len(reranked),
                 "evidence_selected": 0,
@@ -213,6 +218,16 @@ async def run_chat(
     stages_ms["generate_ms"] = ver_ms
 
     if provider_error is not None or generated is None:
+        if inspect:
+            # A refusal whose cause is invisible is a support ticket. The text is
+            # the provider's own message, never the user's question and never
+            # anything from the corpus, so it is safe to show to the operator who
+            # asked for inspection and never part of a normal response.
+            trace["generation"] = {
+                "attempts": attempts,
+                "verification": None,
+                "provider_error": provider_error,
+            }
         return _refused(
             request_id=request_id,
             question=question,
@@ -220,7 +235,7 @@ async def run_chat(
             searched={
                 "queries": rewrites,
                 "products": [analysis.detected_product],
-                "applied_filters": build_metadata_filter(analysis).filter or {},
+                "applied_filters": applied_filters,
                 "candidates_retrieved": len(all_candidates),
                 "candidates_reranked": len(reranked),
                 "evidence_selected": len(evidence),
@@ -245,7 +260,7 @@ async def run_chat(
             searched={
                 "queries": rewrites,
                 "products": [analysis.detected_product],
-                "applied_filters": build_metadata_filter(analysis).filter or {},
+                "applied_filters": applied_filters,
                 "candidates_retrieved": len(all_candidates),
                 "candidates_reranked": len(reranked),
                 "evidence_selected": len(evidence),

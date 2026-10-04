@@ -12,6 +12,7 @@ searching a subset would hide evidence from a stronger (but wrong) guess.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 from uuid import UUID
@@ -20,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.db.models import DocumentUnit
+from app.db.models import Document, DocumentUnit
 from app.retrieval.query_analyzer import QueryAnalysis
 from app.retrieval.vector_store import SearchHit, VectorStore
 
@@ -76,6 +77,29 @@ def build_metadata_filter(
     return FilterPlan(filter=None, suppressed=True, reason="low_confidence")
 
 
+def should_widen(plan: FilterPlan, hits: Sequence[Any]) -> bool:
+    """Whether an empty *filtered* pool should be re-run with no filter.
+
+    The narrowest reading of FR-010 is "widen when confidence is low", and this
+    is the case it misses: confidence was 0.99 and the filter was still wrong,
+    because a category vocabulary that has drifted from the corpus cannot match
+    anything. Measured on the first live retrieval run — `{"product": "jira",
+    "category": "api"}` against a corpus of `rest-api` returned zero candidates
+    and produced a refusal for a page that answered the question.
+
+    Two properties keep this from becoming "search twice always":
+
+    * It fires only when a filter was actually applied. An already-wide search
+      that found nothing is a genuine absence of evidence and must stay one —
+      widening it again would be a second identical query pretending to be
+      diligence.
+    * It costs one extra search, once per rewrite query, and the response
+      reports the widened scope, so the widening is visible rather than a
+      silently better-looking result.
+    """
+    return plan.filter is not None and not hits
+
+
 @dataclass(frozen=True, slots=True)
 class Candidate:
     """One retrieved unit, hydrated for the rerank/evidence stage.
@@ -107,9 +131,6 @@ class Candidate:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-_DEFAULT_NAMESPACE_CANDIDATE = "atlassian-public"
-
-
 async def retrieve(
     query: str,
     *,
@@ -117,7 +138,7 @@ async def retrieve(
     store: VectorStore,
     analysis: QueryAnalysis | None = None,
     top_k: int | None = None,
-    namespace: str = _DEFAULT_NAMESPACE_CANDIDATE,
+    namespace: str | None = None,
 ) -> list[Candidate]:
     """Dense retrieval for one query, through the `VectorStore` protocol only.
 
@@ -133,66 +154,92 @@ async def retrieve(
     """
     settings = get_settings()
     pool = top_k if top_k is not None else settings.retrieval_candidate_pool
+    # The namespace is configuration, not a constant in this file: writing and
+    # reading must agree, and a hard-coded default here reads a *different*
+    # namespace than the store writes whenever PINECONE_NAMESPACE is set. The
+    # symptom of that is a clean registry with an empty candidate pool, which
+    # looks exactly like "nothing indexed yet".
+    ns = namespace if namespace is not None else settings.pinecone_namespace
 
     plan = build_metadata_filter(analysis)
     hits: list[SearchHit] = await store.search(
         query=query,
         top_k=pool,
-        namespace=namespace,
+        namespace=ns,
         metadata_filter=plan.filter,
     )
     if not hits:
         return []
 
     ids = [h.id for h in hits]
-    records = await store.fetch(ids, namespace=namespace)
-    text_by_id = {r.id: r.text for r in records}
+    records = await store.fetch(ids, namespace=ns)
+    records_by_id = {r.id: r for r in records}
 
-    result = await session.execute(select(DocumentUnit).where(DocumentUnit.vector_id.in_(ids)))
-    units_by_vector_id = {row.vector_id: row for row in result.scalars()}
+    # Provenance is joined from the registry, not read from the index. The
+    # registry is the system of record for "which publisher page is this", which
+    # is what FR-004 requires a citation to resolve through, and the join costs
+    # one query. Measured against the live index on 2026-10-04, on
+    # `pinecone==10.0.0`: `Index.search` returns hits whose `metadata` is `None`
+    # for every `fields` value tried — `[]`, `["*"]`, a named list, and the
+    # parameter omitted entirely — and `Index.search` has no `include_metadata`
+    # parameter to ask with. `Index.fetch` does return metadata, but fetch
+    # answered empty for freshly written ids long after search had them, so
+    # neither index-side source is dependable for provenance.
+    rows = (
+        await session.execute(
+            select(DocumentUnit, Document)
+            .join(Document, DocumentUnit.document_id == Document.id)
+            .where(DocumentUnit.vector_id.in_(ids))
+        )
+    ).all()
+    units_by_vector_id = {unit.vector_id: (unit, document) for unit, document in rows}
 
     candidates: list[Candidate] = []
     for hit in hits:
-        unit = units_by_vector_id.get(hit.id)
-        text = text_by_id.get(hit.id, "")
-        metadata = hit.metadata or {}
-        if unit is None:
+        found = units_by_vector_id.get(hit.id)
+        if found is None:
             # A vector the registry no longer trusts: deleted, or indexed by a
             # code path that never recorded it. Dropping it from the pool is the
             # only safe answer — extracting evidence from a record the registry
             # cannot answer for would put an unverifiable claim in the
             # answer stage.
             continue
-        source_url = str(metadata.get("source_url") or "")
+        unit, document = found
+        record = records_by_id.get(hit.id)
+        source_url = document.url or document.canonical_url or ""
         if not source_url:
+            # Uncited evidence is not evidence: a candidate the registry cannot
+            # name a page for cannot become a validated citation.
             continue
         candidates.append(
             Candidate(
                 id=hit.id,
                 unit_id=unit.id,
                 document_id=unit.document_id,
-                text=text,
+                text=record.text if record is not None else "",
                 retrieval_score=hit.score,
-                product=metadata.get("product") or None,
-                category=metadata.get("category") or None,
-                page_type=metadata.get("page_type") or None,
-                title=metadata.get("title") or None,
+                product=document.product,
+                category=document.category,
+                page_type=document.page_type,
+                title=document.title,
                 source_url=source_url,
                 heading_path=list(unit.heading_path) if unit.heading_path is not None else [],
                 token_count=unit.token_count,
                 ordinal=unit.ordinal,
                 metadata={
-                    **metadata,
-                    # `unit_id` is the registry row — DocumentUnit.id — that a Citation
-                    # schema field expects, but retrieval metadata joins on vector_id.
-                    # Riding it through candidate metadata means every downstream
-                    # step can answer "which row of ours does this vector refer to"
-                    # without a second registry round trip.
                     "unit_id": str(unit.id),
+                    "document_id": str(unit.document_id),
+                    "source_id": str(document.source_id),
+                    "source_url": source_url,
+                    "title": document.title,
+                    "product": document.product,
+                    "category": document.category,
+                    "page_type": document.page_type,
+                    "language": document.language,
                 },
             )
         )
     return candidates
 
 
-__all__ = ["Candidate", "FilterPlan", "build_metadata_filter", "retrieve"]
+__all__ = ["Candidate", "FilterPlan", "build_metadata_filter", "retrieve", "should_widen"]

@@ -31,6 +31,8 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+from app.core.config import DocumentCategory, PageType
+
 # ---------------------------------------------------------------------------
 # Confidence levels: recorded verbatim in metadata so downstream grading can
 # separate "the page says it" from "we inferred it".
@@ -51,13 +53,16 @@ _PRODUCT_BY_PATH: tuple[tuple[str, str], ...] = (
     ("/cloud/jira/platform", "jira"),
 )
 
+#: Values are `DocumentCategory` members, not literals: this map and the filter
+#: vocabulary are the same vocabulary, and the question analyser is held to it
+#: (see `DocumentCategory`'s docstring for what happens when they are not).
 _CATEGORY_BY_SEGMENT: dict[str, str] = {
-    "docs": "user-documentation",
-    "administration": "administration",
-    "rest": "rest-api",
-    "v3": "rest-api",
-    "platform": "developer",
-    "service-desk": "developer",
+    "docs": DocumentCategory.USER_DOCUMENTATION.value,
+    "administration": DocumentCategory.ADMINISTRATION.value,
+    "rest": DocumentCategory.REST_API.value,
+    "v3": DocumentCategory.REST_API.value,
+    "platform": DocumentCategory.DEVELOPER.value,
+    "service-desk": DocumentCategory.DEVELOPER.value,
 }
 
 _STOPWORDS = frozenset(
@@ -101,25 +106,25 @@ def _product_from_url(url: str) -> tuple[str, float]:
 def _category_from_url(url: str) -> tuple[str, float]:
     parts = [p for p in urlsplit(url).path.lower().split("/") if p]
     if not parts:
-        return "root", LOW
+        return DocumentCategory.ROOT.value, LOW
     if "rest" in parts:
-        return "rest-api", HIGH
+        return DocumentCategory.REST_API.value, HIGH
     for part in parts:
         if part in _CATEGORY_BY_SEGMENT:
             return _CATEGORY_BY_SEGMENT[part], MEDIUM
-    return "general", LOW
+    return DocumentCategory.GENERAL.value, LOW
 
 
 def _page_type(title: str, url: str) -> tuple[str, float]:
     path = urlsplit(url).path.lower()
     if "/rest/" in path or "/api/" in path:
-        return "api_reference", HIGH
+        return PageType.API_REFERENCE.value, HIGH
     title_lower = title.lower()
     if any(title_lower.startswith(prefix) for prefix in ("how to", "create", "add", "delete")):
-        return "how_to", MEDIUM
+        return PageType.HOW_TO.value, MEDIUM
     if "what" in title_lower or "about" in title_lower:
-        return "concept", MEDIUM
-    return "guide", LOW
+        return PageType.CONCEPT.value, MEDIUM
+    return PageType.GUIDE.value, LOW
 
 
 def _language(text: str) -> tuple[str, float]:

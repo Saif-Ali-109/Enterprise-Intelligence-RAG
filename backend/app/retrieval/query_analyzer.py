@@ -25,26 +25,36 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.core.config import ProductDomain, QuestionIntent, get_settings
+from app.core.config import DocumentCategory, ProductDomain, QuestionIntent, get_settings
 from app.core.errors import ProviderError  # re-exported for the fake providers in tests
 from app.generation.provider import LLMProvider
 
 _PRODUCT_VALUES = {m.value for m in ProductDomain}
 _INTENT_VALUES = {m.value for m in QuestionIntent}
+_CATEGORY_VALUES = {m.value for m in DocumentCategory}
+_CATEGORY_LIST = ", ".join(sorted(_CATEGORY_VALUES))
 
-_PROMPT = """You classify one documentation question for a retrieval system.
+_PROMPT_TEMPLATE = """You classify one documentation question for a retrieval system.
 
 Return strict JSON with exactly this shape:
 {
   "product":   "jira" | "confluence" | "jsm" | "developer" | "unknown",
-  "category":  <short domain string, e.g. "projects", "api-tokens"> | "unknown",
+  "category":  one of the categories the indexed corpus actually contains, or "unknown",
   "intent":    "factual" | "how_to" | "troubleshoot" | "comparison" | "explain_concept" | "unknown",
   "entities":  [<short entity strings>],
   "confidence": { "product": <0..1>, "category": <0..1>, "intent": <0..1>, "entities": <0..1> }
 }
 
+The only categories you may answer with are these, because a category outside
+this list cannot match any indexed page and would narrow the search to nothing:
+{categories}
+
 Every confidence is how sure you are of the field. Use "unknown" and a low
 confidence when the question does not say — never pick a plausible default."""
+
+#: Substituted rather than `.format`-ed: the prompt body is JSON, and every brace
+#: in it is data, not a placeholder.
+_PROMPT = _PROMPT_TEMPLATE.replace("{categories}", _CATEGORY_LIST)
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +74,7 @@ class QueryAnalysis:
     classification_confidence: dict[str, float] = field(default_factory=dict)
 
 
-def _ignored_vocabulary(value: Any, valid: set[str]) -> str | None:
+def _in_vocabulary(value: Any, valid: set[str]) -> str | None:
     if isinstance(value, str) and value.strip().lower() in valid:
         return value.strip().lower()
     return None
@@ -115,21 +125,23 @@ async def analyze_question(
 
     product: str | None = None
     if isinstance(raw, dict):
-        candidate = _ignored_vocabulary(raw.get("product"), _PRODUCT_VALUES)
+        candidate = _in_vocabulary(raw.get("product"), _PRODUCT_VALUES)
         if candidate and candidate != "unknown" and product_conf >= threshold:
             product = candidate
 
     category: str | None = None
     if isinstance(raw, dict):
-        candidate = raw.get("category")
-        if isinstance(candidate, str):
-            candidate = candidate.strip()
-            if candidate and candidate.lower() != "unknown" and category_conf >= threshold:
-                category = candidate
+        # Same rule as product, and for the same reason: a confident category the
+        # corpus cannot contain is a filter that matches nothing. Measured on the
+        # first live run — `"api"` at 0.95 confidence against a corpus of
+        # `rest-api` — and it refused a question the page answered.
+        candidate = _in_vocabulary(raw.get("category"), _CATEGORY_VALUES)
+        if candidate and candidate != "unknown" and category_conf >= threshold:
+            category = candidate
 
     intent: str | None = None
     if isinstance(raw, dict):
-        candidate = _ignored_vocabulary(raw.get("intent"), _INTENT_VALUES)
+        candidate = _in_vocabulary(raw.get("intent"), _INTENT_VALUES)
         if candidate and candidate != "unknown" and intent_conf >= threshold:
             intent = candidate
 

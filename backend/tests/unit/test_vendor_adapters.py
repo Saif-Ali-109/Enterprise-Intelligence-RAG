@@ -814,6 +814,24 @@ class TestRerankResponseHandling:
         assert all("[id]" not in doc for doc in call["documents"])
         assert call["return_documents"] is False
 
+    async def test_long_units_are_truncated_rather_than_rejected(self) -> None:
+        """A maximum-size unit plus a question exceeds the service's pair limit.
+
+        Measured live: a 1000-token unit with a one-line query returned
+        `400 INVALID_ARGUMENT ... exceeds the maximum token limit of 1024` and the
+        whole request failed. Truncation is the only thing standing between a
+        long unit and an answer, and the parameter that does it is named by the
+        service's own error.
+        """
+        from app.retrieval.reranker import PineconeReranker
+
+        inference = FakeInference()
+        reranker = PineconeReranker(client=FakePineconeClient(inference=inference))
+
+        await reranker.rerank(query="q", candidates=_candidates(2), top_n=2)
+
+        assert inference.rerank_calls[0]["parameters"] == {"truncate": "END"}
+
     async def test_substituted_model_is_logged_not_hidden(self) -> None:
         """The SDK documents that the serving model is not always the requested one."""
         from app.retrieval.reranker import PineconeReranker
