@@ -1,28 +1,38 @@
 "use client";
 
 /**
- * The landing page, for now: register a source and watch it crawl (T067, T068).
+ * The landing page (T091): ask a question.
  *
- * **This page is temporary.** T091 replaces it with the chat interface, and T155
- * moves the source console to `app/sources/page.tsx`. It exists now because
- * "an operator can register a source and see indexed content without writing any
- * code" has to be demonstrable before the retrieval half is built, not after —
- * a crawl that cannot be triggered through the UI is a crawl that only exists in
- * a shell script and a test.
+ * **The registry console moved to `/sources`, and this page says so.** Registering
+ * a source is real work — URLs, page caps, a crawl to watch — and it does not
+ * belong above the question box that every visitor came for (T155 completes the
+ * move; until then `/sources` exists and this page links to it).
  *
- * **It is a client component because its children are.** Every query hook is one,
- * and the boundary is drawn here rather than around each child: the layout,
- * fonts, and disclaimer stay server-rendered, and the interactive registry is the
- * only thing that hydrates.
+ * **A client component because the panel is one.** The layout, fonts and
+ * disclaimer stay server-rendered; the chat panel hydrates.
  */
-import { SourceForm } from "@/components/sources/source-form";
+import Link from "next/link";
+import { ChatPanel } from "@/components/chat/chat-panel";
 import { SourceList } from "@/components/sources/source-list";
 
 export default function Home() {
   return (
     <div className="grid gap-8">
-      <SourceForm />
-      <SourceList />
+      <ChatPanel />
+      <section aria-labelledby="corpus-heading" className="grid gap-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 id="corpus-heading" className="text-lg font-semibold">
+            Indexed corpus
+          </h2>
+          <Link href="/sources" className="text-sm underline underline-offset-4 hover:no-underline">
+            Manage sources
+          </Link>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Answers come only from the pages registered here. Nothing else is searched.
+        </p>
+        <SourceList />
+      </section>
     </div>
   );
 }

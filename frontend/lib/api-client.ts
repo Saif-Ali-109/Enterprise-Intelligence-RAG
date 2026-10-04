@@ -94,6 +94,137 @@ export interface Page<T> {
 }
 
 // ============================================================================
+// Chat
+// ============================================================================
+
+/**
+ * A prior turn. Bounded by the contract at ten messages, and `maxItems` there is
+ * a server rule the client does not enforce — the backend refuses with
+ * `VALIDATION_ERROR` and the operator can see why.
+ */
+export interface ChatHistoryMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface AskRequest {
+  question: string;
+  /** Requests the deterministic pipeline trace. Never reasoning (FR-033, FR-034). */
+  inspect?: boolean;
+  history?: ChatHistoryMessage[];
+}
+
+export type RefusalReason =
+  | "INSUFFICIENT_EVIDENCE"
+  | "UNSUPPORTED_INTENT"
+  | "TOO_AMBIGUOUS"
+  | "GENERATION_FAILED";
+
+/**
+ * One validated citation.
+ *
+ * `validation_state` is not decoration: `valid` and `repaired` both mean the link
+ * came from the registry, and only `repaired` means the model's own link
+ * disagreed and was replaced. The two score fields are the two independent
+ * signals the contract keeps separate (FR-021) — never averaged, never shown as
+ * one number.
+ */
+export interface Citation {
+  rank: number;
+  document_id: string;
+  unit_id: string;
+  source_url: string;
+  title: string;
+  product: string | null;
+  category: string | null;
+  heading_path: string[];
+  quote: string;
+  retrieval_score: number | null;
+  rerank_score: number | null;
+  validation_state: "valid" | "stripped" | "repaired";
+  validation_note: string | null;
+}
+
+/**
+ * A weakly related source offered on a refusal.
+ *
+ * `insufficient` is a literal `true` constant: a lead is never evidence and is
+ * never rendered as support for a claim. The field exists so that a future
+ * renderer cannot quietly promote one.
+ */
+export interface Lead {
+  source_url: string;
+  title: string;
+  heading_path: string[];
+  relevance: number;
+  insufficient: true;
+}
+
+/** What a refusal searched, which is what makes it actionable (FR-008). */
+export interface SearchedScope {
+  queries: string[];
+  products: (string | null)[];
+  applied_filters: Record<string, unknown>;
+  candidates_retrieved: number;
+  candidates_reranked: number;
+  evidence_selected: number;
+}
+
+export interface QueryAnalysis {
+  original: string;
+  normalized?: string;
+  detected_product: string | null;
+  detected_category: string | null;
+  intent: string | null;
+  /** Per-field confidence; a low value suppressed filtering rather than narrowing it. */
+  confidence: Record<string, number>;
+  entities: string[];
+  rewrite_queries: string[];
+  ambiguity_note: string | null;
+}
+
+export interface AskTiming {
+  total_ms: number;
+  first_event_ms: number | null;
+  stages_ms: Record<string, number>;
+}
+
+/**
+ * The pipeline trace, present only when `inspect` was requested.
+ *
+ * Free-form because each stage extends it, and deliberately free of any
+ * reasoning field: the contract has none and neither has this type (FR-034).
+ */
+export interface PipelineTrace {
+  request_id?: string | null;
+  retrieval?: Record<string, unknown> | null;
+  reranking?: Record<string, unknown> | null;
+  generation?: Record<string, unknown> | null;
+  citations?: Record<string, unknown> | null;
+}
+
+/**
+ * One response: an answer or a refusal, both of them successes.
+ *
+ * The two outcomes share a shape on purpose (Principle II), so a client has one
+ * render path and cannot present a refusal as an error. `outcome` is what to
+ * branch on; `answer` is `null` exactly when `outcome` is `refused`.
+ */
+export interface AskResponse {
+  request_id: string;
+  question: string;
+  outcome: "answered" | "refused";
+  answer: string | null;
+  refusal_reason: RefusalReason | null;
+  searched?: SearchedScope | null;
+  leads: Lead[];
+  citations: Citation[];
+  query_analysis?: QueryAnalysis | null;
+  timing: AskTiming;
+  trace?: PipelineTrace | null;
+}
+
+// ============================================================================
 // Sources
 // ============================================================================
 
@@ -493,6 +624,29 @@ export const crawlJobs = {
 
   get(id: string, signal?: AbortSignal): Promise<CrawlJob> {
     return send<CrawlJob>(`/crawl-jobs/${encodeURIComponent(id)}`, { signal });
+  },
+};
+
+/**
+ * Chat.
+ *
+ * `ask` is the non-streaming path the contract defines for `POST /chat`, and it
+ * is the one the UI calls today: the answer arrives whole, with its citations
+ * intact, because there are no token deltas to render and a partial citation
+ * list is worse than a short wait (contracts/events.md §3).
+ *
+ * `get` is `GET /chat/{request_id}`. It exists because the contract declares it,
+ * and the client exposes it rather than hiding it: a backend that answers only
+ * live returns `NOT_FOUND`, and the UI's handling of that is the same handling
+ * any other refusal gets.
+ */
+export const chat = {
+  ask(request: AskRequest, signal?: AbortSignal): Promise<AskResponse> {
+    return send<AskResponse>("/chat", { method: "POST", body: request, signal });
+  },
+
+  get(requestId: string, signal?: AbortSignal): Promise<AskResponse> {
+    return send<AskResponse>(`/chat/${encodeURIComponent(requestId)}`, { signal });
   },
 };
 
