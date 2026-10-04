@@ -1,0 +1,50 @@
+# Enterprise Knowledge Intelligence RAG — backend runtime dependencies.
+#
+# Pinned per Constitution Principle VII. Every entry below buys a capability the
+# standard library cannot provide; research.md records the rationale per choice.
+#
+# Deliberately ABSENT (see research.md and plan.md "Complexity Tracking"):
+#   beautifulsoup4, selectolax  — trafilatura already returns lxml, so lxml means
+#                                 zero re-parsing. bs4 measured ~14x slower (R-010).
+#   langchain, llama-index      — framework-by-default composition is prohibited
+#                                 (Constitution VIII); a reviewer must be able to
+#                                 read the real chunking and retrieval logic.
+#   tiktoken / any tokenizer    — the embedder is hosted and its tokenizer is not
+#                                 exposed, so any local count is an approximation
+#                                 either way. tokens.py is calibrated against a
+#                                 reference tokenizer in tests instead (R-013).
+#   redis / any cache           — no measured need at 50-100 pages.
+
+# --- web framework -------------------------------------------------------------
+fastapi==0.141.1
+uvicorn[standard]==0.40.0
+
+# --- validation and settings ---------------------------------------------------
+pydantic==2.13.4
+pydantic-settings==2.13.0
+
+# --- persistence ---------------------------------------------------------------
+SQLAlchemy==2.0.45
+alembic==1.18.1
+asyncpg==0.31.0
+
+# --- outbound HTTP -------------------------------------------------------------
+httpx==0.28.1
+
+# --- content extraction --------------------------------------------------------
+# lxml is the only parser in the extraction path. trafilatura hands back lxml
+# elements, so there is no conversion step and no third parser (R-010).
+# trafilatura 2.2.0 requires lxml>=6.1.1; the two are pinned together deliberately
+# so a resolver cannot quietly pick an lxml the extractor does not support.
+lxml==6.1.3
+trafilatura==2.2.0
+
+# --- vendor SDKs (only ever imported inside the adapter modules) ---------------
+# The vendor's own documentation is mid-migration on index creation (R-002), and
+# the 10.x line is where that migration lands. T027 resolves which form the
+# INSTALLED version accepts; neither form is hard-coded until it does.
+pinecone==10.0.0
+groq==1.7.0
+
+# --- request bodies ------------------------------------------------------------
+python-multipart==0.0.20

@@ -51,7 +51,7 @@ nothing is hard-coded in source (Principle VII).
 | `ALLOWED_DOMAINS` | no | Atlassian documentation hosts | Crawl may not leave this set (FR-027) |
 | `CRAWL_MAX_PAGES` / `CRAWL_MAX_DEPTH` / `CRAWL_DELAY_SECONDS` | no | 100 / 2 / 1.0 | Bounded crawl (FR-027) |
 | `RETRIEVAL_CANDIDATE_POOL` | no | 12 | Initial retrieval budget |
-| `RETRIEVAL_RERANK_TOP_N` | no | 5 | After reranking |
+| `RETRIEVAL_RERANK_TOP_N` | no | 6 | After reranking |
 | `EVIDENCE_MIN_UNITS` / `EVIDENCE_MAX_UNITS` | no | 3 / 6 | Focused evidence set (FR-020) |
 | `MIN_RERANK_SCORE` / `MIN_EVIDENCE_SCORE` | no | tuned | Below these, the system refuses (FR-007) |
 | `GENERATION_MAX_ATTEMPTS` | no | 2 | Hard cap (FR-011) |

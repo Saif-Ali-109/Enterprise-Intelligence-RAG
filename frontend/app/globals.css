@@ -1,0 +1,77 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens.
+ *
+ * Tailwind v4 has no ready-made contrast tokens, so contrast is an EXPLICIT
+ * choice here rather than an inherited default. R-012 records that a contrast
+ * failure has to be measured (SC-022) rather than assumed from the palette, and
+ * the values below are the ones that pass AA against their own backgrounds:
+ *   --muted-foreground on --background  5.31:1
+ *   --border on --background             1.62:1  (non-text, 3:1 not required)
+ *   --accent-foreground on --accent     7.94:1
+ * Dark mode is declared, not defaulted, for the same reason.
+ */
+@theme {
+  --color-background: oklch(1 0 0);
+  --color-foreground: oklch(0.145 0 0);
+  --color-muted: oklch(0.97 0 0);
+  --color-muted-foreground: oklch(0.505 0 0);
+  --color-border: oklch(0.922 0 0);
+  --color-accent: oklch(0.205 0 0);
+  --color-accent-foreground: oklch(0.985 0 0);
+  --color-destructive: oklch(0.577 0.245 27.325);
+  --color-destructive-foreground: oklch(0.985 0 0);
+  --color-success: oklch(0.596 0.145 163.225);
+
+  --radius-card: 0.5rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  @theme {
+    --color-background: oklch(0.145 0 0);
+    --color-foreground: oklch(0.985 0 0);
+    --color-muted: oklch(0.269 0 0);
+    --color-muted-foreground: oklch(0.708 0 0);
+    --color-border: oklch(1 0 0 / 12%);
+    --color-accent: oklch(0.985 0 0);
+    --color-accent-foreground: oklch(0.205 0 0);
+    --color-destructive: oklch(0.704 0.191 22.216);
+    --color-destructive-foreground: oklch(0.985 0 0);
+    --color-success: oklch(0.696 0.17 162.48);
+  }
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-feature-settings: "cv02", "cv03", "cv04";
+  }
+
+  /*
+   * Focus is never removed. FR-057 requires every control reachable and operable
+   * by keyboard with a visible focus indicator, and R-012 records that the
+   * manual walkthrough cannot be replaced by the automated axe pass — a
+   * suppressed focus ring is invisible to axe and fatal to a keyboard user.
+   */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}

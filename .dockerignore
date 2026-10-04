@@ -1,0 +1,75 @@
+# Docker build context exclusions.
+#
+# The context is sent to the daemon in full before any COPY runs, so anything
+# listed here never enters a build layer — which is what makes "no secret is
+# present in any layer" (FR-042) a property of the build rather than a claim.
+#
+# This is belt-and-braces with .gitignore, deliberately. .gitignore protects
+# what is committed; this protects what is shipped. They are not redundant: a
+# developer's uncommitted local .env is in the build context even though it is
+# not in the commit.
+
+# --- secrets: never in any layer, committed or not -----------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+service-account*.json
+
+# --- version control -----------------------------------------------------------
+.git
+.gitignore
+.github
+
+# --- documentation and specs: not needed to run the image ---------------------
+# The image serves the API. It does not need the specification that produced it.
+specs/
+docs/
+*.md
+!README.md
+
+# --- local development ---------------------------------------------------------
+**/.venv
+venv/
+**/node_modules
+**/.next
+**/out
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.coverage
+**/htmlcov
+**/*.egg-info
+
+# --- data: the corpus is fetched at run time, never shipped (FR-032) ------------
+data/
+evaluation/
+crawl-cache/
+.raw/
+pages/
+extracted/
+*.html
+*.htm
+*.pdf
+
+# --- tooling -------------------------------------------------------------------
+.venv/
+node_modules/
+Makefile
+docker-compose*.yml
+scripts/
+**/playwright-report/
+**/test-results/
+
+# --- editors -------------------------------------------------------------------
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp

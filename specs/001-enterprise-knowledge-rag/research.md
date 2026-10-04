@@ -33,6 +33,50 @@ prepended to each chunk.
 - Sparse `pinecone-sparse-english-v0` — rejected. English-only and loses semantic
   generality; corpus is English, but the dense model already covers this well.
 
+### Amendment 2026-09-30 — the truncation risk does not exist, and the real limit is bytes
+
+Measured against a live index with `llama-text-embed-v2` (see R-003 for the method
+and R-002 for the index shape). The 2,048-token ceiling is real, but **the service
+does not truncate at it**.
+
+A marker placed *only in the final bytes* of a record remains findable by a search
+for that marker, at every size tested:
+
+| Record text size | ≈ estimated tokens | Tail marker findable |
+|---|---|---|
+| 2,950 B | ~600 | yes |
+| 8,850 B | ~1,800 | yes |
+| 17,700 B | ~3,600 | yes |
+| 23,600 B | ~4,800 | yes |
+| 38,350 B | ~7,800 | yes |
+| 41,300 B | ~8,400 | **rejected** — over the 40,960-byte cap |
+
+Past roughly 7,800 estimated tokens — nearly four times the model's stated 2,048 —
+the tail is still embedded. So `embed_hard_token_limit` is **not** load-bearing for
+truncation, and R-001's central worry, which was the entire reason for choosing
+`llama-text-embed-v2` over `multilingual-e5-large`, **does not materialise on this
+service**.
+
+**Two consequences, one of which is a real gap this decision created.**
+
+1. **The binding constraint is 40,960 bytes per vector, not 2,048 tokens.** At the
+   measured ~4.4 bytes/token this is roughly 9,300 tokens — so the token ceiling
+   never binds first. 600–1000 token chunks (≈2,500–4,200 bytes) have a 10×
+   margin. But the limit is expressed in **bytes**, and `embed_hard_token_limit` is
+   expressed in tokens, so nothing in the pipeline as designed checks it. A chunk
+   that exceeded it would be **rejected**, not truncated — a hard ingest error, not
+   silent loss, which is the better failure and still an unhandled one.
+
+2. **The `multilingual-e5-large` comparison is now on weaker ground than it was.**
+   The rejection of that model rested on silent truncation, and if this service does
+   not truncate for `llama-text-embed-v2`, the same may be true for it. That does
+   not reopen the decision — `multilingual-e5-large` is still the worse embedder for
+   this corpus, and its 512-token limit would still bite somewhere — but the
+   *stated* reason is no longer verified for this service, and the decision should
+   not be re-argued from it. Recorded so nobody later treats the truncation
+   rationale as an established measurement; it is an inference from a model
+   datasheet that this run did not confirm.
+
 **Resolved 2026-09-28 — accepted.** The owner was asked to choose between this and shrinking
 chunks to fit `multilingual-e5-large`, and selected `llama-text-embed-v2` on the technical
 grounds above. The brief's stated preference is therefore overridden, and the override is
@@ -89,6 +133,110 @@ either form until verified against the installed SDK version. Principle VII requ
 adapting to the current API rather than preserving an obsolete pattern — and equally, not
 inventing a pattern that does not exist.
 
+> ### RESOLVED 2026-09-29 — by introspection of the installed SDK (`pinecone==10.0.0`)
+>
+> The deferred question above is answered, and the answer is that **one of the two documented
+> forms does not exist in the pinned version**. This is a static result: it was obtained by
+> introspecting the installed package, with no API key and no network call, so it is a fact
+> about the SDK rather than an inference from documentation.
+>
+> ```
+> pinecone.__version__                        -> '10.0.0'
+> hasattr(Pinecone, 'create_for_model')        -> False    # the documented name is absent
+> hasattr(Pinecone, 'create_index_for_model') -> True
+> hasattr(pinecone, 'IntegratedSpec')         -> True
+> hasattr(pinecone, 'ServerlessSpec')         -> True
+> ```
+>
+> The two forms are not alternatives. `create_index_for_model` is a **convenience method on
+> `Pinecone`** taking the embedding config as a direct argument:
+>
+> ```python
+> Pinecone.create_index_for_model(
+>     self, name: str, cloud, region, embed: IndexEmbed | EmbedConfig | dict, *,
+>     tags=None, deletion_protection='disabled', read_capacity=None, schema=None, timeout=None,
+> ) -> IndexModel
+> ```
+>
+> **Correction to the note above, verified 2026-09-29.** Two claims in the earlier version of
+> this entry were wrong in ways that mattered, and both were found by executing the calls
+> rather than by reading them.
+>
+> **`create_index_for_model` is not absent — `create_for_model` is.** Introspection had
+> reported `hasattr(Pinecone, 'create_for_model') -> False` and concluded the method did not
+> exist. It does not exist *on `Pinecone`*; it exists on `Pinecone.indexes`. The two classes
+> expose different surfaces, and a negative `hasattr` on one says nothing about the other.
+> The real surface is:
+>
+> ```
+> dir(Pinecone.indexes)  -> ['configure','create','create_backup','create_for_model',
+>                            'delete','describe','describe_backup','exists','list',
+>                            'list_backups']
+> ```
+>
+> **`IntegratedSpec` is present but the 9.x route through it raises.** `hasattr` is true for
+> the class, and the class imports cleanly, so the earlier "not deprecated" reading was an
+> artefact of checking presence rather than availability. Executed against a dummy key — the
+> guard fires before any HTTP request, so this needed no network:
+>
+> ```
+> pc.indexes.create(name="x", spec=IntegratedSpec(cloud="aws", region="us-east-1", embed=EmbedConfig(...)))
+> -> pinecone.errors.exceptions.PineconeTypeError:
+>    Indexes.create() no longer accepts spec=IntegratedSpec(...) — the 2026-07 API
+>    creates integrated-embedding indexes through create_for_model instead: ...
+> ```
+>
+> The rejection message is itself the migration note, naming `create_for_model` with the exact
+> keyword form. `Pinecone.create_index` remains as a documented backwards-compatibility shim
+> forwarding to `Indexes.create`, so it fails identically and is not an escape route.
+>
+> **Four `Pinecone`-level shims are therefore deliberately avoided** in `vector_store.py`, in
+> favour of the `indexes` methods that each shim forwards to: `indexes.exists` (not
+> `has_index`), `indexes.create_for_model` (not `create_index_for_model`),
+> `indexes.describe` (not `describe_index`), and no `Pinecone.Index` constructor. This is not
+> an aesthetic preference — the shims are documented as migration aids with a narrower surface,
+> and R-008's ownership of timeouts is easier to honour against the real method.
+>
+> Further details from the same introspection, all load-bearing:
+>
+> | Question | Answer from `pinecone==10.0.0` |
+> |---|---|
+> | `IndexEmbed` fields | `model`, `field_map`, `metric`, `read_parameters`, `write_parameters` |
+> | `EmbedConfig` fields | `model`, `field_map`, **`dimension`**, `metric`, `read_parameters`, `write_parameters` |
+> | `create_index` (manual path) | `(name, spec, dimension, metric, vector_type, …)` — the caller supplies `dimension` and `metric`, which is precisely what Principle VII forbids |
+> | `Pinecone.has_index` | `(name: str) -> bool` — the cheapest truthful readiness probe, and what `routes_health` uses |
+> | `Index.search` | keyword-only: `(namespace, top_k, inputs, vector, id, filter, fields, rerank, match_terms, query, timeout)` — there is no `include_values`; returned fields are selected with `fields=` |
+> | `Inference.rerank` | `(model, query, documents, rank_fields=['text'], return_documents=True, top_n=None, parameters=None) -> RerankResult` |
+> | `Inference.embed` | `(model, inputs, parameters=None) -> EmbeddingsList` |
+> | `RerankModel` members | `Bge_Reranker_V2_M3`, `Cohere_Rerank_3_5`, `Pinecone_Rerank_V0` — so `bge-reranker-v2-m3` (R-004) is a valid name in this version |
+>
+> **Why `create_index_for_model` is the correct answer on the merits, not merely the available
+> one.** `create_index` requires the caller to state `dimension` and `metric`; the integrated
+> path lets Pinecone derive both from the named model. The contract's `index.dimension_source`
+> is `const: 'service'` — the claim is that dimensionality is read from service configuration
+> and never hard-coded. On the `create_index` path this codebase would have to *assert* that
+> claim; on the `create_index_for_model` path the service sets the dimension and the
+> application never holds an opinion about it, so the claim is true by construction.
+>
+> **What this note did NOT resolve, and now does.** `input_type` persistence and the
+> over-length-chunk behaviour were both deferred to T027's *execution*, because they are
+> properties of the hosted service rather than of the SDK. **T027 ran 2026-09-30.**
+>
+> | Question | Measured answer |
+> |---|---|
+> | Is `input_type` persisted and readable? | **Yes.** The index reports `read_parameters: {input_type: 'query', truncate: 'END'}` and `write_parameters: {input_type: 'passage', truncate: 'END'}`. `IndexInfo.input_type_mismatch()` is checking a real field, not returning `None` because the field is absent. |
+> | Is an over-length chunk truncated or rejected? | **Neither — it is embedded in full** up to ~7,800 estimated tokens, far past the 2,048-token model limit. See the R-001 amendment. The real ceiling is 40,960 *bytes* per vector, above which the write is rejected. See the R-003 amendment. |
+> | Does `fields=[]` return no record data? | **Yes.** Returns `{'id_': ..., 'score_': ..., 'fields': {}}`. |
+> | Are the configured models entitled on the account? | **Yes** — `llama-text-embed-v2` and `bge-reranker-v2-m3` both appear in `pc.inference.list_models()`, alongside `cohere-rerank-3.5` and `pinecone-rerank-v0`. |
+>
+> The index created by `ensure_index` is confirmed serverless, `aws`/`us-east-1`, dimension
+> **1024**, metric `cosine`. Pinecone's own documentation warns that an `input_type` mismatch
+> "quietly degrades" search quality while both calls succeed; that warning is not reproduced
+> here, but nothing measured contradicts it either, and the read/write pair is set correctly.
+>
+> **T027 is no longer an open item.** The remaining unresolved rows in the table below are
+> unaffected by this run.
+
 ---
 
 ## R-003: Write and read paths
@@ -99,7 +247,7 @@ inventing a pattern that does not exist.
 ```python
 idx.upsert_records(
     namespace="atlassian-public",
-    records=[{"id": "doc_8a93f#chunk_004", "chunk_text": "...", "product": "jira", ...}],
+    records=[{"_id": "doc_8a93f#chunk_004", "chunk_text": "...", "product": "jira", ...}],
 )
 
 resp = idx.search(
@@ -110,6 +258,71 @@ resp = idx.search(
     fields=["chunk_text", "product", "category", "heading_path", "source_url"],
 )
 ```
+
+### Amendment 2026-09-30 — measured against a live index; this note was right and the code was not
+
+T027's first execution. The decision above was correct on all three counts. The
+adapter implemented none of them, and each error was independently a hard 400 —
+found only by writing to the real service.
+
+| What the code sent | What the service said |
+|---|---|
+| `upsert(vectors=[{"values": [0.0], "metadata": {...}}])` | `[400] Vector dimension 1 does not match the dimension of the index 1024` |
+| `upsert_records(records=[{"id": ..., "chunk_text": ..., "metadata": {...}}])` | `[400] Invalid type for field 'metadata' in record ... must be a string, number, boolean or list of strings` |
+| `upsert_records(records=[{"_id": ..., "chunk_text": ..., "product": "jira"}])` | **accepted** |
+
+Three corrections to the shape, each measured rather than inferred:
+
+**`values` is not an accepted placeholder.** There is no zero-vector convention on
+this surface. On an integrated-embedding index the vector is derived server-side
+from the schema's `semantic_text` field, and a caller-supplied `values` is
+compared against the index's real dimension — 1024 — and rejected.
+
+**Metadata is flat, not nested.** The service has no nested-object metadata. A
+`{"metadata": {...}}` wrapper is read as a stringified object and rejected on its
+type. Scalars, booleans, and **lists of strings** all round-trip, so
+`heading_path` survives as a real list — which FR-018 depends on, and which a
+joined `"A > B"` string would not support, since the chunker compares one unit's
+path against the next to decide where a section ends.
+
+**The id field is `_id`.** The SDK documents `id` as accepted-and-dropped, and a
+record with `id` is accepted — but the service's own errors refer to records by
+`_id`, so `_id` is the field an error can be read back from.
+
+### What this cost, and the lesson worth more than the fix
+
+The unit tests passed throughout. That is the part worth examining: the write-path
+test asserted `vector["values"] == [0.0]` as *correct behaviour*, with a comment
+calling it "the integrated-embedding placeholder". **The test did not miss the bug,
+it enshrined it** — and it was written alongside a research note that said the
+opposite. A test that asserts an unverified belief propagates the belief with the
+authority of a passing suite.
+
+So the rule this establishes: a belief about a *vendor's* behaviour is not
+established until a call has been made, and a test asserting that belief is
+asserting the belief is untested, not that it is true. R-009's heading walk had the
+same shape of risk and is now measured too.
+
+### The 40,960-byte ceiling — a failure mode that did not exist in this plan
+
+Measured, and not in any prior finding:
+
+```
+Invalid record: Metadata size is 76009 bytes, which exceeds the limit of 40960 bytes per vector
+```
+
+40,960 bytes per vector, and the record's text counts against it. Above it the
+write is **rejected** — not truncated — so an over-long chunk produces a hard
+error and a gap in the corpus rather than a quietly incomplete embedding. That is
+the better of the two outcomes, but it is a failure mode `embed_hard_token_limit`
+(R-001) does not cover, because that limit is expressed in tokens and this one is
+in bytes. 600–1000 tokens is roughly 2,500–4,200 bytes, comfortably inside, so the
+planned chunking is safe — but ingestion has to fail loudly rather than assume the
+service will cope.
+
+`fields=[]` was also confirmed: a search returns `{'id_': ..., 'score_': ...,
+'fields': {}}`. The registry stays the authoritative copy of a unit's text, and
+the one request path that runs per question does not egress the corpus.
 
 **Rationale**: `query()` requires a caller-supplied vector and will never embed, so it is
 wrong for an integrated-embedding index. `search()` is the read counterpart of
@@ -134,18 +347,27 @@ field sent for embedding.
 call would couple retrieval and reranking into one vendor round trip and make the
 substitution impossible without rewriting the retriever. A separate call keeps the
 `Reranker` interface honest and lets the retriever's 12-candidate pool and the reranker's
-top-5 be configured and tested independently (FR-019, FR-020).
+top-6 be configured and tested independently (FR-019, FR-020).
 
 ```python
 rr = pc.inference.rerank(
     model="bge-reranker-v2-m3",
     query=original_query,
     documents=[c.text for c in candidates],
-    top_n=5,
+    top_n=6,
     return_documents=False,
 )
 # rr.data[i].score normalised to [0,1]; higher is more relevant
 ```
+
+> **Amendment, 2026-09-29.** R-004 originally specified `top_n=5`. That was
+> arithmetically unsatisfiable: evidence is selected from the reranked set, and
+> FR-020 requires three to six evidence units, so a 5-wide rerank cannot produce six.
+> The budget is now 12 → 6 → 3–6, with `top_n=6`. The stage-independence argument above
+> is unaffected — it is about not fusing two stages, not about the number. `config.py`
+> now refuses at startup to start if `evidence_max_units` exceeds
+> `retrieval_rerank_top_n`, so this class of contradiction is a startup error rather
+> than a silently capped evidence set.
 
 **Alternatives considered**:
 - Fused `search(rerank=…)` — rejected as above; couples two pipeline stages to one API call.
@@ -293,6 +515,69 @@ re-emitted as separate blocks.
   double-counts. Separator-aware text extraction is required rather than bare `itertext()`.
 - `load_html()` rejects single-block fragments; wrap partial HTML in `<div>…</div>`.
 
+### Amendment 2026-09-30 — measured against real pages from the manifest
+
+R-009 above was written from fixtures. Running the walk against live
+`support.atlassian.com`, `confluence.atlassian.com` and `developer.atlassian.com`
+pages produced four findings the fixtures could not have shown. All four are
+recorded because each one changes code, and two of them are invisible in output.
+
+**1. The walk is correct; the pages are shallower than assumed.** Measured across
+14 real Jira documentation pages, the heading depth inside `<main>` is:
+
+| Deepest level | Pages |
+|---|---|
+| 2 | 9 of 14 |
+| 3 | 4 of 14 |
+| 4 | 1 of 14 |
+
+Nothing deeper than level 4 anywhere in the sample, and most pages are
+`h1` + a flat run of `h2`. On `reopen-a-sprint` the walk recovers
+`Reopen a sprint > Scenarios for reopening sprints > Simple scenarios` and
+truncates correctly to `… > Complex scenarios` on the sibling — which is the
+behaviour the whole note exists to specify, working on a real page. A system
+expecting deep nesting everywhere would be waiting for structure these pages do
+not have; the walk handles depth 1 and depth 4 identically.
+
+**2. `h1` text is frequently repeated as the first `h2`.** Measured on
+`access-a-project`: `<h1>Access a space</h1>` then `<h2>Access a space</h2>`.
+Carried literally, every unit beneath gets `["Access a space", "Access a
+space"]` — a path that reads as a section nested inside itself and names no real
+location. `_push_heading` skips a level whose text repeats its parent. This is
+*not* heading de-duplication: it applies only across differing levels, so two
+distinct `h2` sections sharing a name are unaffected, and the level structure the
+stack depends on is preserved.
+
+**3. Two of six manifest start_urls are landing pages, not articles.**
+`create-and-organize-work-in-confluence-cloud` and `developer.atlassian.com/cloud/jira/platform`
+have 2 and 6 raw `<hN>` elements respectively and yield **zero** headings after
+extraction — verified that the content *is* server-rendered (13,048 and 3,846
+words in the raw HTML, no empty-container shell signature), so trafilatura is
+selecting correctly and these are genuinely one-`h1` landing pages. `favor_recall`
+and `favor_precision` produce byte-identical output on both, so no option fixes
+this because nothing is broken. **Consequence for the manifest**: six sources at
+one URL each is not enough to produce a corpus with `h2`+ structure, and T017's
+topic expectations assume a hierarchy these six pages largely do not have. The
+crawl scope rule (host + containing directory) is what must widen the corpus,
+not the extractor.
+
+**4. trafilatura drops all heading structure on short pages — measured threshold
+≈ 3 sentences.** Below it, a page with `<h1>` and `<h2>` returns **one
+concatenated `<p>`** with the headings flattened *into the prose as text*, not
+omitted. This is a different behaviour from "this page has no headings" and
+must not be read as one; a pipeline that trusted it would index the boilerplate
+and a site's own navigation under `heading_path == []`. This is the concrete
+case T051's "main content too small" rejection (FR-029) exists to exclude, and
+`test_a_page_too_short_for_extraction_yields_no_heading_path` pins it.
+
+**Not fixed here, and deliberately.** Real pages also yield interactive
+boilerplate as content blocks — `"Was this helpful?"` and `"Rate this page:"`
+both arrive as ordinary `<p>` units and are currently treated as indexable
+content. That is *block-level* filtering, which is a different job from T051's
+*page-level* rejection ("main content is too small or too boilerplate-heavy",
+FR-029), and it belongs there rather than being pre-empted here. Recorded so it
+is a decision to make at T051 and not a surprise at the Phase 3 checkpoint.
+
 ---
 
 ## R-010: HTML parser choice — lxml, and it is free
@@ -377,36 +662,221 @@ rather than on preference.
 `hard_limit × 0.75`, so a unit that the estimator believes is 1600 tokens is split even
 though the model would technically accept it.
 
+### Amendment 2026-09-30 — the 10% calibration target is not achievable, and should not be
+
+R-013 asks for a local estimator within **10%** of a reference tokenizer, and says the
+fallback if calibration fails is to adopt the reference tokenizer. T054 began by measuring,
+and the target turns out to be **structurally unreachable** rather than merely unmet.
+
+**Why.** Token density varies by a factor of **4.4x** across realistic documentation blocks,
+measured against `bert-base-uncased`:
+
+| Block | chars/token | 1000 tokens would be |
+|---|---|---|
+| dense code (`{"a":1,"b":2,...}`) | 0.98 | 980 bytes |
+| prose | 4.35 | 4,350 bytes |
+| table row | 1.38 | 1,380 bytes |
+| URL / id runs | 2.77 | 2,770 bytes |
+
+For a single `chars ÷ d` heuristic to be within 10% of all of these, `d` would have to
+satisfy `3.96 ≤ d ≤ 0.89` — **an empty interval**. No constant divisor exists. Four
+candidates were measured over 38 real Atlassian blocks; the best had a mean error of 0.127
+and 16 of 38 blocks outside 10%, and a word-count estimator failed *worse* than 10% on code
+(−98%) because code has few words and many tokens.
+
+**So the fallback clause applies, and it should be taken — but for a different reason than
+the one recorded here.** R-013's stated reason for avoiding a tokenizer was that the embedder
+is hosted, so any local count approximates a token definition "we cannot see", and that
+2x headroom against the 2,048-token limit absorbs the error. **T027 removed the premise.**
+The service does not truncate at 2,048 tokens at all; the binding constraint is a **byte**
+limit — 40,960 bytes per vector (see the R-003 amendment) — and it is ~5.9x above a
+1,000-token chunk in the worst measured case. The precision that a tokenizer would buy is
+being spent against a limit that is **not the one that binds**.
+
+**The decision this changes.** Precision was never the requirement; the requirement is never
+writing a record the service rejects. That is checkable in bytes, exactly, with no tokenizer
+and no calibration:
+
+| Bound | Measured limit | How the code should enforce it |
+|---|---|---|
+| Vector size (rejects the write) | **40,960 bytes/vector** | Checked directly. Exact, no estimator involved. |
+| Chunk size (quality target) | 600–1000 tokens | Estimated; error is tolerable because 1,000 tokens is ≤6,898 bytes against a 40,960-byte limit |
+
+`embed_hard_token_limit` (2,048) and `embed_safety_factor` (0.75) are **retained** as
+defence in depth, but they are no longer the load-bearing bound and the naming should not
+imply otherwise. The new load-bearing setting is a byte ceiling, and it is checked in bytes.
+
+**What is still true of R-013.** The 10% figure is retired as a target, not as an
+observation: the measurement that retires it is above, and it is reproducible from the
+table. The recorded fallback — adopt a reference tokenizer — is **declined**, on the grounds
+that the embedder's own tokenizer remains unavailable and adding a general-purpose one would
+buy precision against the wrong tokenizer to guard a limit that is not the binding one. This
+is recorded rather than quietly dropped, because "we tried and the target was wrong" and
+"we changed our mind" are different facts and only one of them is reversible.
+
 ---
 
-## R-014: Suppressing model reasoning — an FR-034 leak that is easy to walk into
+## R-014: Model reasoning is received and never exposed — FR-034 discharged at the boundary
 
-**Decision**: explicitly disable reasoning exposure on **every** provider call, and make
-the response parser drop any unknown key rather than pass it through.
+**Decision**: read exactly one field out of the provider's message — `content` — and build a
+`Completion` that has no field capable of carrying anything else. Everything else the
+provider sends is discarded at the adapter boundary. A post-condition walks the constructed
+value on every return, and a text heuristic catches deliberation inlined into `content`.
 
-**Rationale**: Groq's current default generation models are **reasoning** models. The API
-exposes `reasoning_format` (`hidden` / `raw` / `parsed`) and an `include_reasoning` toggle,
-and `reasoning_effort` defaults to `medium` for the gpt-oss family. Left alone, raw
-reasoning can come back in the message content — and any of it that reaches a response,
-an SSE event, or a log line is a direct FR-034 violation, the one requirement the spec
-treats as absolute ("MUST NOT expose private model reasoning or internal deliberation in
-any response, event, or view").
+**Revised 2026-09-29 by measurement.** The original decision for this finding was to
+"explicitly disable reasoning exposure on every provider call" using `include_reasoning=False`
+and `reasoning_format="hidden"`. That is **wrong on this surface, and had it been implemented
+would have failed on the first query.** The controls named do not exist on Groq's
+OpenAI-compatible endpoint. Measured against a live account on 2026-09-29:
 
-The default is the hazard here, not an explicit opt-in. Three controls, all required:
+| Probe | Result |
+|---|---|
+| `reasoning_effort="none"` | HTTP 400 `` `reasoning_effort` must be one of `low`, `medium`, or `high` `` |
+| `openai/gpt-oss-120b`, effort `low` | `message` keys `[content, reasoning, role]`; `reasoning` 23 chars; `reasoning_tokens` 5 |
+| `openai/gpt-oss-120b`, effort `high` | `message` keys `[content, reasoning, role]`; `reasoning` 578 chars; `reasoning_tokens` 124 |
+| `openai/gpt-oss-20b`, effort `low` | `message` keys `[content, reasoning, role]`; `reasoning` 18 chars; `reasoning_tokens` 5 |
+| `openai/gpt-oss-20b`, effort `high` | `message` keys `[content, reasoning, role]`; `reasoning` 407 chars; `reasoning_tokens` 94 |
 
-1. **Provider call**: set `include_reasoning=False` and `reasoning_format="hidden"`
-   explicitly. Do not rely on a default.
-2. **Response parser**: unmarshal into the declared Pydantic model and discard unknown
-   fields. Never pass a raw provider dict through to a response or event.
-3. **Contract test**: the event schemas in [contracts/events.md](./contracts/events.md)
-   contain no reasoning, thought, or deliberation field, and a test asserts the generator's
-   request payload cannot request reasoning.
+Three conclusions, and the first is the one that changed the implementation:
 
-**Latency note**: `reasoning_effort` defaults to `medium` on gpt-oss models, which spends
-tokens and wall-clock time even when the reasoning is hidden and discarded. Setting
-`low` (or `none` where supported) on the query-classification path removes that cost and
-directly supports SC-017. Classification is a cheap judgement task; extended deliberation
-buys nothing.
+1. **There is no parameter that turns the channel off.** `none` is rejected, and every
+   accepted effort returns a populated `message.reasoning`. The only lever is `low`, which
+   reduces the tokens spent on deliberation (5 vs 124 on the 120B) without removing it.
+   So the control cannot be a request parameter.
+2. **FR-034 is about exposure, not receipt.** It says the system MUST NOT *expose* private
+   model reasoning — not that it must not receive it. A provider reasoning is permitted; a
+   reader of this system seeing it is not. The obligation falls on the emitted surface, which
+   is the one place the system controls.
+3. **An earlier reading of this finding would have been catastrophic, not merely strict.**
+   Refusing any response containing a reasoning key — the shape the original decision implies
+   — fails on **every** query from a reasoning model, because both configured models reason
+   by default. That is a system that cannot answer anything, defended under the banner of
+   protecting a requirement. The `assert_no_reasoning` check is retained, retargeted at the
+   value *about to be returned* rather than the provider's envelope.
+
+**Why reading one field rather than filtering keys.** The obvious alternative is walking the
+response and dropping anything matching `REASONING_KEY_PATTERN`. That is denylist-shaped, so it
+stays correct for responses that do not reason and silently passes on the next novel key name
+a provider invents. `Completion` is built from `content` alone, which has no equivalent
+failure. The post-condition then walks dataclass fields, so a future `Completion.reasoning` is
+a run-time failure rather than a new field that satisfies every type checker and no requirement.
+
+**Two checks, because they catch different things.** The structural check proves no field exists
+that could carry deliberation; it cannot prove the *content* is free of it, since a model can
+inline "First, let us consider…" where no key betrays it. `text_looks_like_reasoning` is the
+second check and is documented as the heuristic it is: a false positive refuses an answer that
+was fine, which is the correct direction for a MUST NOT to fail in.
+
+**What is recorded about the discard.** The boundary reports *that* a channel was dropped and
+how many `reasoning_tokens` it cost — never the text, in a log or an exception, because a quoted
+leak has only moved rooms. A silent discard is otherwise indistinguishable from a service that
+stopped reasoning, and those two have different causes and different costs.
+
+**`reasoning_effort` is therefore a cost control, not a compliance control.** It is set to
+`low` on all calls, `Literal["low", "medium", "high"]` in settings so an unsupported value
+fails at startup rather than as a 400 on the first real query, and R-014's original latency
+note about SC-017 still holds: at `high` the 120B spends 124 tokens deliberating a one-sentence
+answer, and that spend buys nothing when the result is discarded.
+
+**Contract test**: the event schemas in [contracts/events.md](./contracts/events.md) contain no
+reasoning, thought, or deliberation field. The sole reasoning-named field anywhere is
+`reasoning_exposed: false` on `GET /config`, which is the attestation that this decision is in
+force — `tests/contract/test_openapi_conformance.py` asserts it exists, is constant `False`, and
+is the only such name.
+
+---
+
+## R-015: Crawl frontier — link-following fails on 4 of 6 sources, sitemaps do not
+
+**Question.** How does a bounded crawl find the pages to ingest, given six
+registered `start_url`s?
+
+**The decision as first taken, and why it did not survive measurement.** The
+owner chose link-following within the existing host-plus-directory scope rule,
+because it needed no manifest change and kept the corpus auditable from six
+declared roots. That reasoning holds. The premise did not: it assumes the
+documentation pages link to their siblings, and **measured live on 2026-10-01,
+they do not.**
+
+| start_url | hrefs on page | in scope at depth 1 |
+|---|---|---|
+| `.../jira-software-cloud/docs/access-a-project/` | 667 | **1** - itself |
+| `.../jira-cloud-administration/docs/set-up-jira-products/` | 283 | **4**, of which 3 malformed |
+| `.../confluence-cloud/docs/create-and-organize-work-in-confluence-cloud/` | 484 | **1** - itself |
+| `.../jira-service-management-cloud/docs/what-are-issues-and-requests/` | 1235 | **4**, of which 3 malformed |
+| `developer.atlassian.com/cloud/jira/platform/` | 64 | **29** |
+| `developer.atlassian.com/cloud/jira/service-desk/` | 80 | **22** |
+
+The four `support.atlassian.com` sources render their documentation navigation
+**client-side**. 656 of the 667 hrefs on `access-a-project/` point at other
+products' directories; the list of sibling articles is not in the HTML at all.
+Link-following alone would have produced roughly 50-80 pages, essentially all REST
+API reference, unable to answer a single one of the 32 curated questions about
+Jira user configuration, Confluence, or JSM.
+
+The two `developer.atlassian.com` hosts are the opposite: their navigation *is*
+server-rendered. So **both mechanisms are kept and each is used where it was
+measured to work.**
+
+**What replaced it.** Every allowlisted host declares its sitemap in its own
+`robots.txt`. `support.atlassian.com/sitemap.xml` is a `sitemapindex` of 56
+sub-sitemaps, each ending `.xml` (not `sitemap.xml` - an early filter looked for
+that suffix, found zero children, and briefly suggested the host published no
+sub-sitemaps at all; the manifest's notes had it right and the filter was wrong).
+The four product sub-sitemaps list:
+
+| Sub-sitemap | `/docs/` pages |
+|---|---|
+| `jira-cloud.xml` | 645 |
+| `confluence-cloud.xml` | 456 |
+| `jira-cloud-administration.xml` | 258 |
+| `jira-service-management-cloud.xml` | 1190 |
+
+Using a site's own declared inventory is *more* compliant with its stated
+wishes, not less.
+
+**The rule that keeps it from being a loophole.** A sitemap is an **inventory,
+not an authorisation.** `support.atlassian.com/robots.txt` disallows
+`/contact/*`, and a sitemap may still list a disallowed URL. Every
+sitemap-derived URL therefore passes the **same** robots gate as a link-derived
+one, and is still held to the source's crawl scope. There is deliberately no
+second authorisation path: if a sitemap could grant access that a link could
+not, "does the site allow this?" would become a property of where a URL was
+discovered rather than of the URL itself.
+
+**Two things measured on the way, both now handled and both tested:**
+
+- **Malformed hrefs resolve to plausible wrong URLs.** The live pages emit
+  literally escaped backslashes:
+  `.../what-are-issues-and-requests/\/\/confluence.atlassian.com\/servicedeskcloud/...`.
+  `urljoin` does not reject these - it resolves them to a *wrong* URL under the
+  start page's own path, which is worse than dropping them, because the wrong URL
+  passes every later check and gets crawled. A raw backslash is therefore
+  rejected; `%5C` (a backslash the publisher meant) is still accepted.
+- **`scope_prefix` is wrong for a start_url that is a section index.** It drops
+  the leaf segment, which is correct for an article (`/docs/access-a-project/`
+  becomes `/docs/`) but too broad for an index: `/cloud/jira/platform/` would
+  scope to `/cloud/jira/` and silently pull in sibling sections such as
+  `/cloud/jira/software/`. The derived rule stays the default; a source that is
+  an index declares `scope_prefix` explicitly.
+
+**Determinism.** The frontier is **sorted before the page cap is applied.** A cap
+applied to an unordered set keeps a different subset on each run, so `max_pages`
+would mean something different every time - which breaks SC-012 (re-crawling an
+unchanged source adds zero duplicate content) for reasons having nothing to do
+with content change.
+
+**Result, measured.** A run over the six real sitemaps queues **154 pages**,
+inside the 100-200 page corpus target SC-011 now states, across all five product
+domains: 49 developer-platform, 40 `jira-software-cloud`, 25
+`jira-cloud-administration`, 20 `confluence-cloud`, 20
+`jira-service-management-cloud`. Refusals are counted, never silent: 133
+out-of-scope, 9 malformed, 2,626 duplicates (expected - every in-scope link on a
+support article is already a sitemap entry).
+
+**Not yet measured.** That run passed a permissive robots gate, because the real
+one is T049. The robots enforcement path is therefore untested against live
+directives; what *is* tested is that sitemap and link URLs take the *same* gate.
 
 ---
 
@@ -417,8 +887,12 @@ buys nothing.
 | Exact `EmbedConfig` construction form (`create_for_model` vs `IntegratedSpec`) | **Documented inconsistency in vendor docs**; v10 deprecation reported but unconfirmed. Resolve by smoke test | Phase 3 |
 | Groq Developer-plan rate limits | Partially behind a client-rendered tab; figures taken from a secondary table. Re-check before capacity planning | Phase 12 |
 | `gpt-oss-safeguard-20b` strict-schema support | Vendor labels it "best effort". Must not underpin a correctness-critical extraction path | Phase 12 |
-| Rerank model entitlement (`bge-reranker-v2-m3` vs `cohere-rerank-3.5`) | Account-dependent; interface is fixed either way | Phase 10 |
-| Embedding models actually enabled on the account | `pc.inference.list_models()` is authoritative, not the docs. `llama-text-embed-v2` chosen as default but not yet confirmed entitled | Phase 3 |
+| Rerank model entitlement (`bge-reranker-v2-m3` vs `cohere-rerank-3.5`) | **Confirmed 2026-09-30.** Both appear in `pc.inference.list_models()` on the account T027 ran against. The interface is fixed either way | Closed |
+| Embedding models actually enabled on the account | **Confirmed 2026-09-30.** `llama-text-embed-v2` is entitled and is the model the live index reports. `multilingual-e5-large` is also entitled, so R-001's rejection of it rests on quality and its 512-token limit, not on availability | Closed |
+| Whether an over-length chunk is truncated or rejected | **Answered 2026-09-30:** embedded in full to ~7,800 estimated tokens; the ceiling is 40,960 bytes per vector, above which the write is rejected. See the R-001 and R-003 amendments | Closed |
+| The 40,960-byte-per-vector cap is not checked anywhere in the pipeline | **Closed 2026-09-30.** `_fits` in `chunker.py` checks the byte ceiling alongside the token ceiling, and `test_no_chunk_exceeds_the_service_byte_limit` asserts it exactly. Tokens alone were insufficient: tables measure 1.38 chars/token, so a table judged "1,000 tokens" arrives at 6,898 bytes. An over-limit unit with no safe boundary is emitted **and** flagged rather than suppressed | Closed |
+| The robots gate has never run against live directives | Real gap. T049's gate is still to be written, so R-015's 154-page measurement used a permissive gate. What *is* tested is that sitemap-derived and link-derived URLs take the same gate, so the two cannot diverge once T049 lands | Phase 3 (T049) |
+| Two shipped functions were never exercised on their failure path | **Closed 2026-10-01.** `is_within_scope` used `zip(..., strict=True)` on a length the guard only bounded *below*, so it raised `ValueError` on every URL deeper than the scope prefix — i.e. every real URL. `scripts/validate_datasets.py`'s `_format_error` called `.get()` on a `jsonschema.ValidationError`, which has attributes, so it raised `AttributeError` on the first schema violation and had never reported one. Both were found by planting bad input, which is the only way either surfaces: both are on paths that only run when something is wrong. Both fixed, both now have tests | Closed |
 
 **Resolved 2026-09-28** — embedding model (`llama-text-embed-v2`), language model pair
 (`openai/gpt-oss-120b` generation, `openai/gpt-oss-20b` classification), and the nine-table

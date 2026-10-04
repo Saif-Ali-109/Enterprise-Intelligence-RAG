@@ -188,15 +188,29 @@ paths:
             schema: { $ref: '#/components/schemas/SourceCreate' }
       responses:
         '201':
-          description: Registered; crawl started
+          description: 'Registered; crawl started unless the request set `start_crawl: false`'
           content:
             application/json:
               schema:
                 type: object
-                required: [source, crawl_job]
+                required: [source]
                 properties:
                   source: { $ref: '#/components/schemas/Source' }
-                  crawl_job: { $ref: '#/components/schemas/CrawlJob' }
+                  crawl_job:
+                    description: |
+                      The job that will perform the crawl. **Null when the request set
+                      `start_crawl: false`.**
+
+                      *Amended 2026-10-03.* This field was required and non-null. That forced a
+                      registration with `start_crawl: false` to invent a job, and the only
+                      invented job that can exist — a `queued` row — holds the partial unique
+                      index `crawl_jobs_one_active_per_source`, so the operator's next explicit
+                      `POST /sources/{source_id}/crawl` was refused as "already running" against
+                      a crawl that never began. A `null` here is the honest answer; a caller that
+                      asked for no crawl gets no job to poll.
+                    anyOf:
+                      - { $ref: '#/components/schemas/CrawlJob' }
+                      - { type: 'null' }
         '200':
           description: Already registered; the existing source is returned
           content:
@@ -578,11 +592,25 @@ paths:
                     required: [candidate_pool, rerank_top_n, evidence_min, evidence_max, filters_enabled]
                     properties:
                       candidate_pool: { type: integer, examples: [12] }
-                      rerank_top_n: { type: integer, examples: [5] }
+                      rerank_top_n: { type: integer, examples: [6] }
                       evidence_min: { type: integer, examples: [3] }
                       evidence_max: { type: integer, examples: [6] }
-                      min_rerank_score: { type: number }
-                      min_evidence_score: { type: number }
+                      min_rerank_score:
+                        type: [number, 'null']
+                        minimum: 0
+                        maximum: 1
+                        description: >-
+                          Absent means no floor is configured, which the selector
+                          reads as "do not refuse on score alone". Recorded from
+                          configuration, never derived from this run (FR-065).
+                      min_evidence_score:
+                        type: [number, 'null']
+                        minimum: 0
+                        maximum: 1
+                        description: >-
+                          The same for the evidence floor. Also recorded from
+                          configuration, not from this run (FR-065), so a run
+                          cannot justify its own thresholds.
                       filters_enabled: { type: boolean }
                   generation:
                     type: object
@@ -854,8 +882,23 @@ components:
         category: { type: [string, 'null'] }
         heading_path: { type: array, items: { type: string } }
         quote: { type: string, description: The supporting span, shown for inspection. }
-        retrieval_score: { type: [number, 'null'] }
-        rerank_score: { type: [number, 'null'] }
+        retrieval_score:
+          type: [number, 'null']
+          minimum: -1
+          maximum: 1
+          description: >-
+            Cosine similarity from the embedding model, so -1 to 1 and not a
+            probability. A value below zero is a legitimate report of
+            dissimilarity and must not be clamped.
+        rerank_score:
+          type: [number, 'null']
+          minimum: 0
+          maximum: 1
+          description: >-
+            The reranker's relevance score, which is what MIN_RERANK_SCORE is
+            compared against. Null when the reranker did not run, or when it
+            fell back and no independent score exists - a fallback reports
+            retrieval_score rather than inventing one here.
         validation_state: { type: string, enum: [valid, stripped, repaired] }
         validation_note: { type: [string, 'null'] }
 
@@ -952,7 +995,13 @@ components:
         product: { type: [string, 'null'] }
         category: { type: [string, 'null'] }
         heading_path: { type: array, items: { type: string } }
-        similarity_score: { type: number }
+        similarity_score:
+          type: number
+          minimum: -1
+          maximum: 1
+          description: >-
+            Cosine similarity, so -1 to 1. Not a probability, and a negative
+            value is a legitimate report of dissimilarity rather than a fault.
 
     RerankedCandidate:
       type: object
@@ -962,8 +1011,22 @@ components:
         unit_id: { type: string, format: uuid }
         document_id: { type: string, format: uuid }
         heading_path: { type: array, items: { type: string } }
-        similarity_score: { type: number, description: Carried through for comparison. Not comparable with rerank_score. }
-        rerank_score: { type: number }
+        similarity_score:
+          type: number
+          minimum: -1
+          maximum: 1
+          description: >-
+            Carried through for comparison, on the cosine scale. Not comparable
+            with rerank_score, which is a different scale entirely.
+        rerank_score:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: >-
+            The relevance score the gate is compared against, so the range is
+            declared. A vendor that changed its scaling would then be visible
+            as a contract violation rather than as a silent change in the
+            observed pass rate.
         rank: { type: integer, minimum: 1 }
 
     SelectedEvidence:

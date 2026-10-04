@@ -1,0 +1,28 @@
+# ESLint ignores.
+#
+# `frontend/` uses the flat config (eslint.config.mjs) created in Phase 6; ESLint
+# 9 reads `ignores` from that file, not from a legacy .eslintignore. This file
+# exists so the intent is in one obvious place in the meantime and so a reviewer
+# reading the frontend directory sees the exclusions. The authoritative list is
+# in eslint.config.mjs once it exists; keep the two in step.
+
+node_modules/
+.next/
+out/
+build/
+dist/
+coverage/
+next-env.d.ts
+*.tsbuildinfo
+
+# Playwright
+e2e/
+playwright-report/
+test-results/
+blob-report/
+.playwright/
+
+# Secrets must never be linted into a report or a cache.
+.env
+.env.*
+!.env.example

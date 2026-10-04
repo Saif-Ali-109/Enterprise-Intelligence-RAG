@@ -49,7 +49,7 @@ accessibility and keyboard-navigation gates
 within 8s for 95% of questions; no unexplained pause over 10s
 
 **Constraints**: corpus bounded to 50–100 pages / 500–1500 chunks; one active crawl per
-source; retrieval pool 12 → rerank 5 → final context 3–6; max 2 generation attempts;
+source; retrieval pool 12 → rerank 6 → final context 3–6; max 2 generation attempts;
 crawl bounded by page count, depth, and inter-request delay; SSRF allowlist on all fetches
 
 **Scale/Scope**: single-operator research and demonstration tool. No end-user accounts, no
@@ -74,7 +74,7 @@ systems, no non-English corpora, no live-data retrieval. Modular monolith — ex
 | IX. Security by Default | PASS | Env-only secrets; SSRF deny-list checked pre-connection; CORS explicit; length/size caps; HTML sanitisation; structured error envelope, no stack traces |
 | X. Observable, Secret-Safe Operation | PASS | Request id propagated end-to-end; per-stage latency; provider/model/token usage logged; secrets excluded; bounded retention on stored questions |
 | XI. Deliberate Scope, Incremental Delivery | PASS | 50–100 page cap honoured; 20-phase order preserved; no microservices; cloud vector service not replaced with a local fake |
-| Additional: retrieval budget | PASS | 12 → 5 → 3–6 enforced as configuration, not convention |
+| Additional: retrieval budget | PASS | 12 → 6 → 3–6 enforced as configuration, not convention |
 | Additional: metadata discipline | PASS | Fixed compact metadata schema in [data-model.md](./data-model.md) |
 | Additional: interface surface | PASS | Endpoint contract in [contracts/](./contracts/) |
 
@@ -254,7 +254,7 @@ Complexity was actively *removed* during planning:
 
 | Decision | Why deferred | Revisit when |
 |---|---|---|
-| `EmbedConfig` construction form (`create_for_model` vs `IntegratedSpec`) | Pinecone's own documentation is mid-migration and the two forms disagree. A v10 deprecation was reported but could not be confirmed from official sources (R-002) | Phase 3, resolved by a smoke test against the installed SDK — not by guessing |
+| `EmbedConfig` construction form (`create_for_model` vs `IntegratedSpec`) | **Resolved 2026-09-29** by introspecting the installed SDK: `create_for_model` does not exist in `pinecone==10.0.0`; the method is `create_index_for_model`, and `IntegratedSpec` is the spec object it builds internally (R-002) | Resolved. `create_index_for_model` is the code path, and it is also the only one that makes `dimension_source: 'service'` true by construction |
 | Rerank model entitlement (`bge-reranker-v2-m3` vs `cohere-rerank-3.5`) | Account-dependent; the `Reranker` interface is fixed either way | Phase 10 |
 | Groq Developer-plan rate limits | Partially behind a client-rendered tab in the docs; figures came from a secondary table (R-008) | Phase 12, before capacity planning |
 

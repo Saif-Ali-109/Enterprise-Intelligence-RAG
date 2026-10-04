@@ -69,6 +69,7 @@ A registered public documentation entry point.
 | `enabled` | `BOOLEAN` | no | default `true` |
 | `status` | `TEXT` | no | `active` \| `disabled` \| `error` |
 | `last_crawl_at` | `TIMESTAMPTZ` | yes | |
+| `max_pages` / `max_depth` / `delay_seconds` | `INTEGER` / `INTEGER` / `REAL` | yes | Per-source crawl bounds (FR-027). **Added 2026-10-03** with migration `b7d41c0a92f3`, because `SourceUpdate` in `contracts/openapi.yaml` accepts all three and a bound that is validated then discarded is worse than an API that never offered it. Null means "use the configured default"; the orchestrator treats null as not-overridden, never as zero |
 | `created_at` / `updated_at` | `TIMESTAMPTZ` | no | |
 
 **Validation**: `start_url` scheme ∈ {`http`, `https`} only. `allowed_domains` derives from
@@ -383,9 +384,17 @@ accept: a partially-superseded document can briefly serve mixed-version evidence
 | `citations (query_log_id, rank)` | Ordered citation render |
 | `evaluation_results (run_id, question_id)` unique | Per-question audit |
 
-The vector store's own `document_id` metadata field serves document-scoped deletion
-(R-005, FR-031). It is a filter field, so a deletion is a single scoped call rather than an
-enumeration of vector IDs — which is also what makes tombstoning a document mid-crawl safe.
+The vector store's own `document_id` metadata field makes a document-scoped deletion expressible
+(R-005, FR-031).
+
+**Amended 2026-10-03.** Deletion does not use that filter. `VectorStore.delete` takes ids, and
+the deletion path supplies the ids the *registry* recorded for the document's units. The
+registry is the authority on what was indexed, the enumeration is bounded by the document's own
+unit count, and the ids it names are the same immutable ids (R-005) that live citations already
+resolve against. A filter-based delete would also delete any vector whose registry row was lost —
+which is convenient, and wrong here: it removes content the registry cannot account for without
+recording why. `document_id` stays in the metadata because it is what makes a scoped search and a
+scoped audit possible at all.
 
 ---
 
