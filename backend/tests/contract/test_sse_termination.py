@@ -204,3 +204,47 @@ def uuid_of(value: str):
     import uuid
 
     return uuid.UUID(value)
+
+
+class TestOutageSequence:
+    """One outage, one clean sequence: three events, then `error`, then [DONE].
+
+    The contract sentence "no event is ever skipped within 1–7" is scoped to a
+    pipeline that *runs* — see the 2026-10-05 amendment to events.md. A stage
+    that raised is reported by `error`, and `retrieval_completed` with
+    `candidates_retrieved: 0` would present a failed retrieval as a completed
+    one. This test is the amendment's evidence: it fails if the stream ever
+    emits a zero-count `retrieval_completed` after a raise, and it fails if the
+    `error` frame arrives twice — the second `error` was the bug live testing
+    found, hidden by the fact that the wire looked fine.
+    """
+
+    async def test_a_vector_outage_emits_three_events_then_error(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.api import routes_chat_stream
+        from app.core.errors import VectorServiceUnavailable
+
+        class Down:
+            async def search(self, **_kwargs: object) -> list[object]:
+                raise VectorServiceUnavailable("down")
+
+            async def fetch(self, *_args: object, **_kwargs: object) -> list[object]:
+                raise VectorServiceUnavailable("down")
+
+        monkeypatch.setattr(routes_chat_stream, "get_vector_store", lambda: Down())
+
+        response = await client.post(
+            "/api/v1/chat/stream",
+            json={"question": QUESTION},
+            headers={"Accept": "text/event-stream"},
+        )
+        frames = _parse_frames(response.text)
+        names = [name for name, _data in frames if name]
+
+        assert names == ["query_received", "query_analyzed", "retrieval_started", "error"], (
+            f"an outage must not be presented as a completed retrieval: {names}"
+        )
+        assert frames[-1][1] == "[DONE]"
+        # Exactly one error frame.
+        assert sum(1 for name, _ in frames if name == "error") == 1

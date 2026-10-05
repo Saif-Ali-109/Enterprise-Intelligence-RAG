@@ -124,6 +124,18 @@ class EventEmitter:
             return EVENT_ORDER[len(self.events)]
         return None
 
+    @property
+    def terminal_emitted(self) -> bool:
+        """Whether the stream already carries its one terminal event.
+
+        Both error handlers in the request path — the service's, which emits for
+        expected failures, and the route's, which emits for unexpected ones —
+        check this before emitting their own `error` frame. Without it, a vector
+        outage produces one clean wire (the service's frame) and one dead task
+        (the route's refused second `error`), which is a bug the wire cannot show.
+        """
+        return bool(self.events) and self.events[-1].is_terminal
+
     def emit(self, name: EventName, /, **fields: Any) -> StreamEvent:
         """One event, in order, with the request id stamped on it."""
         expected = self.next_expected

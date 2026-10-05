@@ -194,7 +194,7 @@ async def run_chat(
             emit=emit,
         )
     except AppError as exc:
-        if emit is not None:
+        if emit is not None and not emit.terminal_emitted:
             # `error` is terminal and replaces `answer_completed`, which is why it
             # may arrive here with events still outstanding (events.md §3).
             emit.emit(

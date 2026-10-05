@@ -41,6 +41,7 @@ from fastapi.responses import StreamingResponse
 from app.api.deps import Session
 from app.api.events import DONE, EventEmitter, EventName
 from app.chat.service import run_chat
+from app.core.errors import AppError
 from app.core.logging import get_logger, get_request_id, new_request_id
 from app.core.ratelimit import enforce_ask
 from app.generation.provider import get_language_model
@@ -94,18 +95,28 @@ async def ask_stream(request: AskRequest, session: Session) -> StreamingResponse
                 inspect=request.inspect,
                 emit=emitter,
             )
+        except AppError as exc:
+            # Expected failures: run_chat has already emitted the `error` frame
+            # and recorded the audit row. Logging it again as "outside the error
+            # vocabulary" is a false alarm, and emitting a second `error` is the
+            # one the emitter refuses.
+            _log.info(
+                "the pipeline failed with a known error",
+                extra={"request_id": request_id, "code": exc.code.value},
+            )
         except Exception as exc:  # noqa: BLE001 - the stream must still terminate
             _log.error(
                 "the streaming pipeline raised outside the error vocabulary",
                 extra={"request_id": request_id, "error": str(exc)[:200]},
             )
-            emitter.emit(
-                EventName.ERROR,
-                code="INTERNAL_ERROR",
-                message="The pipeline ended without completing. No answer was produced.",
-            )
+            if not emitter.terminal_emitted:
+                emitter.emit(
+                    EventName.ERROR,
+                    code="INTERNAL_ERROR",
+                    message="The pipeline ended without completing. No answer was produced.",
+                )
         finally:
-            if not (emitter.events and emitter.events[-1].is_terminal):
+            if not emitter.terminal_emitted:
                 emitter.emit(
                     EventName.ERROR,
                     code="INTERNAL_ERROR",
