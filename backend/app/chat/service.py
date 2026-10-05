@@ -35,7 +35,7 @@ from app.retrieval.citations import (
     validate_citations,
 )
 from app.retrieval.evidence import build_leads, gate_evidence, select_evidence
-from app.retrieval.query_analyzer import analyze_question
+from app.retrieval.query_analyzer import QueryAnalysis, analyze_question
 from app.retrieval.query_rewriter import rewrite_queries
 from app.retrieval.reranker import RerankCandidate, RerankedHit, Reranker
 from app.retrieval.retriever import build_metadata_filter, retrieve, should_widen
@@ -44,6 +44,19 @@ from app.retrieval.vector_store import VectorStore
 #: How many weakly related sources a refusal may offer (FR-008). Three, because
 #: a list of ten is a search result page, not a hint.
 LEAD_LIMIT = 3
+
+
+def searched_products(analysis: QueryAnalysis) -> list[str | None]:
+    """The products the search actually covered.
+
+    For an ambiguous question that is every product it named — the response then
+    says which domains were searched, which is what makes the ambiguity note
+    actionable rather than decorative. For an ordinary question it is the one
+    product the analysis found, or `null` when it found none.
+    """
+    if analysis.ambiguity_note is not None and analysis.named_products:
+        return list(analysis.named_products)
+    return [analysis.detected_product]
 
 
 @dataclass(slots=True)
@@ -197,6 +210,7 @@ async def _answer(
             "intent": analysis.classification_confidence.get("intent", 0.0),
         },
         "rewrite_queries": rewrite_queries(question, analysis),
+        "ambiguity_note": analysis.ambiguity_note,
     }
 
     # ── 2. retrieve --------------------------------------------------------
@@ -260,7 +274,7 @@ async def _answer(
             reason="INSUFFICIENT_EVIDENCE",
             searched={
                 "queries": rewrites,
-                "products": [analysis.detected_product],
+                "products": searched_products(analysis),
                 "applied_filters": applied_filters,
                 "candidates_retrieved": len(all_candidates),
                 "candidates_reranked": len(reranked),
@@ -319,7 +333,7 @@ async def _answer(
             reason="GENERATION_FAILED",
             searched={
                 "queries": rewrites,
-                "products": [analysis.detected_product],
+                "products": searched_products(analysis),
                 "applied_filters": applied_filters,
                 "candidates_retrieved": len(all_candidates),
                 "candidates_reranked": len(reranked),
@@ -344,7 +358,7 @@ async def _answer(
             reason="INSUFFICIENT_EVIDENCE",
             searched={
                 "queries": rewrites,
-                "products": [analysis.detected_product],
+                "products": searched_products(analysis),
                 "applied_filters": applied_filters,
                 "candidates_retrieved": len(all_candidates),
                 "candidates_reranked": len(reranked),
@@ -412,7 +426,7 @@ async def _answer(
             reason="GENERATION_FAILED",
             searched={
                 "queries": rewrites,
-                "products": [analysis.detected_product],
+                "products": searched_products(analysis),
                 "applied_filters": applied_filters,
                 "candidates_retrieved": len(all_candidates),
                 "candidates_reranked": len(reranked),

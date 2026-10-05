@@ -25,7 +25,13 @@ from app.db.models import Document, DocumentUnit
 from app.retrieval.query_analyzer import QueryAnalysis
 from app.retrieval.vector_store import SearchHit, VectorStore
 
-FilterReason = Literal["confident", "low_confidence", "disabled", "no_analysis"]
+FilterReason = Literal[
+    "confident",
+    "low_confidence",
+    "disabled",
+    "no_analysis",
+    "ambiguous",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +68,11 @@ def build_metadata_filter(
         return FilterPlan(filter=None, suppressed=True, reason="disabled")
     if analysis is None:
         return FilterPlan(filter=None, suppressed=True, reason="no_analysis")
+    if analysis.ambiguity_note is not None:
+        # The question names more than one product, so the analyser's single
+        # answer is one of several and filtering on it would silently drop the
+        # rest. Suppressed for a reason the response can report (edge case 13).
+        return FilterPlan(filter=None, suppressed=True, reason="ambiguous")
 
     threshold = settings.classification_confidence_threshold
     confidences = analysis.classification_confidence
