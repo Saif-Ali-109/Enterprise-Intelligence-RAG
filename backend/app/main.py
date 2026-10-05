@@ -464,6 +464,7 @@ def _install_routers(app: FastAPI, prefix: str) -> None:
         ("app.api.routes_documents", "router"),
         ("app.api.routes_crawl_jobs", "router"),
         ("app.api.routes_chat", "router"),
+        ("app.api.routes_chat_stream", "router"),
         ("app.api.routes_evaluations", "router"),
     ):
         module = _try_import(module_name)

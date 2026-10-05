@@ -21,6 +21,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.events import EventEmitter, EventName
 from app.chat.audit import record_query
 from app.core.config import get_settings
 from app.core.errors import AppError, ProviderError
@@ -92,6 +93,25 @@ class ChatResult:
     stages_ms: dict[str, int] = field(default_factory=dict)
 
 
+def _stream_refusal_through(emit: EventEmitter | None) -> None:
+    """Emit the events a refusal skipped, with zero counts, **through event 7**.
+
+    events.md §3: no event is ever skipped within 1–7, and a stage that produced
+    nothing still reports with a zero count. Every early return in the pipeline
+    therefore goes through here, because the alternative — remembering to emit
+    placeholders per branch — is how a stream ends with four events and a client
+    that waits forever.
+
+    **Event 8 is not included, and that is load-bearing.** It is emitted by
+    `_refused`, which is the only place that knows the refusal's payload. An
+    earlier version of this helper emitted `answer_completed` as a placeholder and
+    `_refused` then emitted it again, which the emitter refused — correctly. Two
+    emitters for one event is the bug the order check exists to catch.
+    """
+    if emit is not None:
+        emit.emit_skipped_through(EventName.CITATION_VALIDATION)
+
+
 def _refused(
     *,
     request_id: str,
@@ -103,6 +123,7 @@ def _refused(
     trace: dict[str, Any] | None,
     query_analysis: dict[str, Any] | None,
     stages_ms: dict[str, int],
+    emit: EventEmitter | None = None,
 ) -> ChatResult:
     payload: dict[str, Any] = {
         "request_id": request_id,
@@ -119,6 +140,17 @@ def _refused(
         payload["query_analysis"] = query_analysis
     if trace is not None:
         payload["trace"] = trace
+    if emit is not None:
+        emit.emit(
+            EventName.ANSWER_COMPLETED,
+            outcome=payload["outcome"],
+            answer=None,
+            refusal_reason=payload["refusal_reason"],
+            searched=payload["searched"],
+            leads=payload["leads"],
+            citations=[],
+            total_ms=total_ms,
+        )
     return ChatResult(payload=payload, stages_ms=stages_ms)
 
 
@@ -131,6 +163,7 @@ async def run_chat(
     reranker: Reranker | None = None,
     inspect: bool = False,
     started_unix: float | None = None,
+    emit: EventEmitter | None = None,
 ) -> ChatResult:
     """The one place an `AskResponse` is assembled, audited on every path (FR-048).
 
@@ -158,8 +191,17 @@ async def run_chat(
             inspect=inspect,
             started_unix=started_unix,
             request_id=request_id,
+            emit=emit,
         )
     except AppError as exc:
+        if emit is not None:
+            # `error` is terminal and replaces `answer_completed`, which is why it
+            # may arrive here with events still outstanding (events.md §3).
+            emit.emit(
+                EventName.ERROR,
+                code=exc.code.value,
+                message=str(exc),
+            )
         await record_query(
             session,
             request_id=request_id,
@@ -209,6 +251,7 @@ async def _answer(
     inspect: bool,
     started_unix: float | None,
     request_id: str,
+    emit: EventEmitter | None,
 ) -> ChatResult:
     settings = get_settings()
     started = time.perf_counter() if started_unix is None else started_unix
@@ -220,11 +263,18 @@ async def _answer(
 
         reranker = get_reranker()
 
+    if emit is not None:
+        emit.emit(EventName.QUERY_RECEIVED, question=question, inspect=inspect)
+
     # ── 1. analyse ---------------------------------------------------------
     t0 = time.perf_counter()
     analysis = await analyze_question(question, provider=provider)
     stages_ms["analyze_ms"] = int((time.perf_counter() - t0) * 1000)
-    query_analysis_payload = {
+    # Computed once and shared: the response payload, the `query_analyzed` event,
+    # and the retrieval loop must all report the *same* queries, and a rewriter
+    # called twice is a rewriter that may be called twice differently.
+    rewritten: list[str] = rewrite_queries(question, analysis)
+    query_analysis_payload: dict[str, Any] = {
         "original": analysis.original_question,
         "normalized": analysis.original_question,
         "detected_product": analysis.detected_product,
@@ -236,16 +286,36 @@ async def _answer(
             "category": analysis.classification_confidence.get("category", 0.0),
             "intent": analysis.classification_confidence.get("intent", 0.0),
         },
-        "rewrite_queries": rewrite_queries(question, analysis),
+        "rewrite_queries": rewritten,
         "ambiguity_note": analysis.ambiguity_note,
     }
 
+    plan = build_metadata_filter(analysis)
+    if emit is not None:
+        emit.emit(
+            EventName.QUERY_ANALYZED,
+            detected_product=analysis.detected_product,
+            detected_category=analysis.detected_category,
+            intent=analysis.intent,
+            entities=analysis.entities,
+            classification_confidence=query_analysis_payload["confidence"],
+            rewrite_queries=rewritten,
+            applied_filters=plan.filter or {},
+            filters_suppressed=plan.suppressed,
+            ambiguity_note=analysis.ambiguity_note,
+        )
+        emit.emit(
+            EventName.RETRIEVAL_STARTED,
+            candidate_pool=settings.retrieval_candidate_pool,
+            query_count=len(rewritten),
+        )
+
     # ── 2. retrieve --------------------------------------------------------
     t0 = time.perf_counter()
-    rewrites = rewrite_queries(question, analysis)
+    rewrites = rewritten
     all_candidates: list[Candidate] = []
-    plan = build_metadata_filter(analysis)
     widened = False
+    queries_executed: list[dict[str, Any]] = []
     per_query_filters: dict[str, dict[str, Any]] = {}
     seen_candidates: set[str] = set()
 
@@ -270,6 +340,13 @@ async def _answer(
             aspect_plan = build_metadata_filter(None)
             found = await retrieve(base_question(rq), session=session, store=store, analysis=None)
         per_query_filters[rq] = aspect_plan.filter or {}
+        queries_executed.append(
+            {
+                "query": rq,
+                "returned": len(found),
+                "top_score": max((c.retrieval_score for c in found), default=0.0),
+            }
+        )
         if aspect_plan.suppressed:
             widened = widened or plan.suppressed or True
         for candidate in found:
@@ -283,6 +360,12 @@ async def _answer(
             all_candidates.append(candidate)
     stages_ms["retrieve_ms"] = int((time.perf_counter() - t0) * 1000)
     applied_filters = {} if widened or plan.suppressed else (plan.filter or {})
+    if emit is not None:
+        emit.emit(
+            EventName.RETRIEVAL_COMPLETED,
+            candidates_retrieved=len(all_candidates),
+            queries_executed=queries_executed,
+        )
 
     # ── 3. rerank ----------------------------------------------------------
     t0 = time.perf_counter()
@@ -301,6 +384,12 @@ async def _answer(
         top_n=settings.retrieval_rerank_top_n,
     )
     stages_ms["rerank_ms"] = int((time.perf_counter() - t0) * 1000)
+    if emit is not None:
+        emit.emit(
+            EventName.RERANKING_COMPLETED,
+            candidates_reranked=len(reranked),
+            rerank_model=settings.pinecone_rerank_model,
+        )
 
     # ── 4. select evidence ---------------------------------------------------
     t0 = time.perf_counter()
@@ -328,6 +417,7 @@ async def _answer(
     # nothing for the model to be tempted into filling.
     decision = gate_evidence(reranked, thresholds=settings, selected=evidence)
     if not evidence or decision.refused:
+        _stream_refusal_through(emit)
         return _refused(
             request_id=request_id,
             question=question,
@@ -345,6 +435,7 @@ async def _answer(
             trace=trace if inspect else None,
             query_analysis=query_analysis_payload,
             stages_ms=stages_ms,
+            emit=emit,
         )
 
     # ── 5. generate, verify, and never force -------------------------------
@@ -355,6 +446,15 @@ async def _answer(
     provider_error: str | None = None
     while attempts < settings.generation_max_attempts:
         attempts += 1
+        if emit is not None:
+            # A second `generation_started` is the only signal that a retry
+            # happened (events.md §4), which is why it is emitted per attempt
+            # rather than once per request.
+            emit.emit(
+                EventName.GENERATION_STARTED,
+                evidence_count=len(evidence),
+                attempt=attempts,
+            )
         try:
             generated = await generate_answer(question, evidence=evidence, provider=provider)
         except ProviderError as exc:
@@ -377,6 +477,7 @@ async def _answer(
     stages_ms["generate_ms"] = ver_ms
 
     if provider_error is not None or generated is None:
+        _stream_refusal_through(emit)
         if inspect:
             # A refusal whose cause is invisible is a support ticket. The text is
             # the provider's own message, never the user's question and never
@@ -404,6 +505,7 @@ async def _answer(
             trace=trace if inspect else None,
             query_analysis=query_analysis_payload,
             stages_ms=stages_ms,
+            emit=emit,
         )
 
     if (verification is None and not generated.answerable) or (
@@ -412,6 +514,7 @@ async def _answer(
         # The model said the evidence does not support an answer, and the
         # verifier agreed after the cap: the honest response is a refusal, not a
         # softly-phrased paragraph that still reads as an answer.
+        _stream_refusal_through(emit)
         return _refused(
             request_id=request_id,
             question=question,
@@ -438,6 +541,7 @@ async def _answer(
             trace=trace if inspect else None,
             query_analysis=query_analysis_payload,
             stages_ms=stages_ms,
+            emit=emit,
         )
 
     # ── 6. validate citations ------------------------------------------------
@@ -469,6 +573,7 @@ async def _answer(
     granularity = citation_granularity(markers, cited_ids)
 
     if granularity == "none":
+        _stream_refusal_through(emit)
         # An answer whose claims point at nothing is the one failure FR-002 exists
         # to prevent, and it is checked here rather than trusted: the model's own
         # `citations` array can name served ids the prose never leans on, and a
@@ -497,6 +602,7 @@ async def _answer(
             trace=trace if inspect else None,
             query_analysis=query_analysis_payload,
             stages_ms=stages_ms,
+            emit=emit,
         )
 
     validation = validate_citations(
@@ -506,6 +612,15 @@ async def _answer(
             {"evidence_id": c.evidence_id, "source_url": c.source_url} for c in generated.citations
         ],
     )
+
+    if emit is not None:
+        emit.emit(
+            EventName.CITATION_VALIDATION,
+            citations_valid=sum(1 for c in validation.citations if c.validation_state == "valid"),
+            citations_stripped=validation.stripped,
+            citations_repaired=validation.repaired,
+            rejected_identifiers=[*markers.rejected, *validation.rejected_identifiers],
+        )
 
     citations_payload = [
         {
@@ -546,7 +661,7 @@ async def _answer(
             "rejected_identifiers": validation.rejected_identifiers,
         }
 
-    payload = {
+    payload: dict[str, Any] = {
         "request_id": request_id,
         "question": question,
         "outcome": "answered",
@@ -557,6 +672,16 @@ async def _answer(
     }
     if trace:
         payload["trace"] = trace
+
+    if emit is not None:
+        emit.emit(
+            EventName.ANSWER_COMPLETED,
+            outcome=payload["outcome"],
+            answer=payload["answer"],
+            citations=citations_payload,
+            total_ms=payload["timing"]["total_ms"],
+            confidence=None,
+        )
 
     return ChatResult(payload=payload, stages_ms=stages_ms)
 

@@ -164,11 +164,11 @@ def _paths(document: dict[str, Any]) -> set[str]:
 #:   built_or_tracked`), so a new contract path cannot be quietly skipped.
 #: Contract paths with no implementation yet, and the task that owns them.
 #:
-#: `/chat` and `/chat/{request_id}` left this list on 2026-10-04 (T090), which is
-#: what `test_the_pending_list_contains_no_endpoint_that_already_works` exists to
+#: `/chat` and `/chat/{request_id}` left this list on 2026-10-04 (T090), and
+#: `/chat/stream` on 2026-10-05 (T127). Both departures are what
+#: `test_the_pending_list_contains_no_endpoint_that_already_works` exists to
 #: catch: an entry that no longer describes anything is a list nobody reads.
 _PENDING = {
-    "/chat/stream": "T127",
     "/evaluations/dataset": "T148",
     "/evaluations/runs": "T148",
     "/evaluations/runs/{run_id}": "T148",
