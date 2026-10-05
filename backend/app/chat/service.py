@@ -16,7 +16,7 @@ asks for it on the request; no reasoning is attached ever.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,14 +36,41 @@ from app.retrieval.citations import (
 )
 from app.retrieval.evidence import build_leads, gate_evidence, select_evidence
 from app.retrieval.query_analyzer import QueryAnalysis, analyze_question
-from app.retrieval.query_rewriter import rewrite_queries
+from app.retrieval.query_rewriter import base_question, rewrite_queries, scope_of
 from app.retrieval.reranker import RerankCandidate, RerankedHit, Reranker
-from app.retrieval.retriever import build_metadata_filter, retrieve, should_widen
+from app.retrieval.retriever import Candidate, build_metadata_filter, retrieve, should_widen
 from app.retrieval.vector_store import VectorStore
 
 #: How many weakly related sources a refusal may offer (FR-008). Three, because
 #: a list of ten is a search result page, not a hint.
 LEAD_LIMIT = 3
+
+
+def _analysis_for_scope(analysis: QueryAnalysis, scope: str | None) -> QueryAnalysis:
+    """The analysis as it applies to one aspect's domain.
+
+    A cross-product question's own analysis suppresses the product filter, which
+    is right for the question and wrong for one of its aspects: each aspect wants
+    exactly one domain's evidence. So the scope replaces the filter decision, and
+    the ambiguity note goes with it — an aspect is not ambiguous, it is specific.
+    """
+    if scope is None:
+        return analysis
+    return replace(
+        analysis,
+        detected_product=scope,
+        named_products=[scope],
+        ambiguity_note=None,
+        classification_confidence={
+            **analysis.classification_confidence,
+            # Certain, and not because anything was classified: the product name
+            # is in the user's own sentence. Gating this on the classifier's
+            # confidence would suppress the filter for the very aspects that most
+            # need one — the cross-product question whose filter was suppressed in
+            # the first place.
+            "product": 1.0,
+        },
+    )
 
 
 def searched_products(analysis: QueryAnalysis) -> list[str | None]:
@@ -216,21 +243,44 @@ async def _answer(
     # ── 2. retrieve --------------------------------------------------------
     t0 = time.perf_counter()
     rewrites = rewrite_queries(question, analysis)
-    all_candidates = []
+    all_candidates: list[Candidate] = []
     plan = build_metadata_filter(analysis)
     widened = False
+    per_query_filters: dict[str, dict[str, Any]] = {}
+    seen_candidates: set[str] = set()
+
     for rq in rewrites:
-        found = await retrieve(rq, session=session, store=store, analysis=analysis)
-        if should_widen(plan, found):
+        # Each scoped query searches its own domain (T115 / SC-004). The scope
+        # lives in a metadata filter, never in the embedded text: repeating a
+        # product name in a similarity query biases the ranking toward units that
+        # merely mention it, which is not the same as units that are about it.
+        scope = scope_of(rq)
+        aspect_analysis = _analysis_for_scope(analysis, scope)
+        aspect_plan = build_metadata_filter(aspect_analysis)
+        found = await retrieve(
+            base_question(rq), session=session, store=store, analysis=aspect_analysis
+        )
+        if should_widen(aspect_plan, found):
             # A confident filter that matches nothing is a filter that hid the
             # evidence, and FR-010's reasoning — a too-narrow filter silently
             # removes what a good answer needs — does not care how sure the
             # classifier was. So the search is repeated once, wide, and the
             # response reports the widened scope rather than the intended one.
             widened = True
-            plan = build_metadata_filter(None)
-            found = await retrieve(rq, session=session, store=store, analysis=None)
-        all_candidates.extend(found)
+            aspect_plan = build_metadata_filter(None)
+            found = await retrieve(base_question(rq), session=session, store=store, analysis=None)
+        per_query_filters[rq] = aspect_plan.filter or {}
+        if aspect_plan.suppressed:
+            widened = widened or plan.suppressed or True
+        for candidate in found:
+            # Merged and deduplicated across aspects, and the *pool* budget is
+            # still respected: two aspects do not buy 24 candidates.
+            if len(all_candidates) >= settings.retrieval_candidate_pool:
+                break
+            if candidate.id in seen_candidates:
+                continue
+            seen_candidates.add(candidate.id)
+            all_candidates.append(candidate)
     stages_ms["retrieve_ms"] = int((time.perf_counter() - t0) * 1000)
     applied_filters = {} if widened or plan.suppressed else (plan.filter or {})
 
@@ -259,6 +309,16 @@ async def _answer(
         reranked,
         min_units=max(1, settings.evidence_min_units or 3),
         max_units=min(settings.evidence_max_units or 6, 6),
+        # T116 / SC-004: a question that spans domains reserves a slot per domain,
+        # so the answer cannot be assembled from whichever one scores highest.
+        required_groups=(
+            {product: product for product in analysis.named_products if product}
+            if analysis.ambiguity_note
+            else None
+        ),
+        # A single-domain question is answered from its own domain first (T112),
+        # unless the widening path above found evidence nowhere else.
+        prefer_group=None if analysis.ambiguity_note else analysis.detected_product,
     )
     stages_ms["select_ms"] = int((time.perf_counter() - t0) * 1000)
 

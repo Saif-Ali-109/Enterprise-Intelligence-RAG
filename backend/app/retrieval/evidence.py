@@ -21,6 +21,7 @@ from app.retrieval.reranker import RerankedHit
 class _RegistryShape(Protocol):
     """Not the vector store; what the evidence stage needs about each unit."""
 
+    product: str | None
     unit_id: str
     document_id: str
     source_id: str
@@ -42,6 +43,7 @@ class EvidenceUnit:
     hit: RerankedHit
     unit_id: str = ""
     document_id: str = ""
+    product: str | None = None
     source_id: str = ""
     category: str | None = None
     page_type: str | None = None
@@ -93,6 +95,8 @@ def select_evidence(
     units_by_id: dict[str, _RegistryShape] | None = None,
     min_units: int = 3,
     max_units: int = 6,
+    required_groups: dict[str, str] | None = None,
+    prefer_group: str | None = None,
 ) -> list[EvidenceUnit]:
     """Score by relevance-strength and diversity; keep the best 3–6.
 
@@ -113,6 +117,7 @@ def select_evidence(
         )
         return EvidenceUnit(
             hit=h,
+            product=getattr(registry, "product", None) or h.metadata.get("product") or None,
             unit_id=getattr(registry, "unit_id", "") or h.metadata.get("unit_id", "") or "",
             document_id=getattr(registry, "document_id", "")
             or h.metadata.get("document_id", "")
@@ -139,26 +144,72 @@ def select_evidence(
     accepted: list[EvidenceUnit] = []
     accepted_texts: list[str] = []
 
-    for composite, h, u in scored:
+    def _try_accept(composite: float, h: RerankedHit, u: EvidenceUnit) -> bool:
+        """One unit through every rule. Returns whether it was taken."""
         if len(accepted) >= max_units:
-            break
+            return False
         # A near-duplicate of an already-accepted unit is evidence the same fact
         # arrived twice; it adds nothing the first did not say.
         if _near_duplicate(h.text, accepted_texts):
-            continue
+            return False
         doc_id = u.document_id or h.metadata.get("document_id") or h.id
         count = per_document.get(doc_id, 0)
-        if count >= 3:
-            # A second unit from one page is honest sometimes; a third never is.
-            continue
+        if count >= 2:
+            # A second unit from one page is honest sometimes — two sections of a
+            # long page can each answer part of the question. A third is
+            # repetition, and the evidence set is small enough (three to six) that
+            # a third of six slots is a third of the answer.
+            return False
         if count == 1:
             # The first unit from a page is real evidence; the second is
             # preference-softened, not dropped — only near-identical passage
-            # text drops it.
+            # text drops it. `composite` is a local copy, so the score ordering
+            # that produced this list is unchanged.
             composite *= 0.9
         accepted.append(u)
         accepted_texts.append(h.text)
         per_document[doc_id] = count + 1
+        return True
+
+    if required_groups:
+        # One reserved slot per group the question spans, filled by that group's
+        # best unit. Reserved first so a strong single domain cannot spend the
+        # whole budget before the second domain is considered.
+        satisfied: set[str] = set()
+        for group in required_groups.values():
+            for composite, h, u in scored:
+                key = u.product or h.metadata.get("product") or ""
+                if key != group or key in satisfied:
+                    continue
+                if _try_accept(composite, h, u):
+                    satisfied.add(key)
+                    break
+
+    def _group_of(h: RerankedHit, u: EvidenceUnit) -> str:
+        return u.product or h.metadata.get("product") or ""
+
+    if prefer_group is not None:
+        # The question's own domain fills the set; another domain is a fallback
+        # for a short pool, not a second opinion (T112). These two passes replace
+        # the general fill rather than preceding it — a third pass over the same
+        # list would re-admit the out-of-domain units the preference just declined,
+        # which is how a "preference" ends up meaning nothing.
+        for composite, h, u in scored:
+            if len(accepted) >= max_units:
+                break
+            if _group_of(h, u) == prefer_group:
+                _try_accept(composite, h, u)
+        for composite, h, u in scored:
+            if len(accepted) >= min_units:
+                break
+            if _group_of(h, u) != prefer_group:
+                _try_accept(composite, h, u)
+        return accepted
+
+    for composite, h, u in scored:
+        if len(accepted) >= max_units:
+            break
+        _try_accept(composite, h, u)
 
     # FR-020 expects 3–6. The selection never *adds* units to meet the floor;
     # if the pool has fewer than three, the honest answer is a short set, and a

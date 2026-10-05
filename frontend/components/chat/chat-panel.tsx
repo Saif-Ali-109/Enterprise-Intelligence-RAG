@@ -33,8 +33,9 @@
 import { useState } from "react";
 import type { AskResponse } from "@/lib/api-client";
 import { QUESTION_MAX_LENGTH, useAsk } from "@/hooks/useChat";
-import { CitationList } from "@/components/chat/citation-list";
 import { withCitationLinks } from "@/components/chat/citation-links";
+import { CrossProductSummary } from "@/components/chat/cross-product-summary";
+import { describeSources, summariseSources } from "@/components/chat/source-summary";
 import { RefusalPanel } from "@/components/chat/refusal-panel";
 import { UnavailablePanel } from "@/components/chat/unavailable-panel";
 import { Textarea } from "@/components/ui/input";
@@ -168,6 +169,13 @@ function AnswerRegion({ response }: { response: AskResponse }) {
           rendered as links to the citation they name — so a claim and its evidence
           are one click apart, which is the point of FR-002.
         */}
+        {/*
+          How many sources and domains contributed, counted from the validated
+          citations rather than reported by the service (T117): the contract has no
+          source-count field, and a count derived from the citations cannot
+          disagree with them.
+        */}
+        <p className="text-xs text-muted-foreground">{describeSources(summariseSources(response.citations))}</p>
         <p className="whitespace-pre-wrap text-sm leading-relaxed">
           {withCitationLinks(
             response.answer ?? "The service returned an answer with no text.",
@@ -175,11 +183,7 @@ function AnswerRegion({ response }: { response: AskResponse }) {
           )}
         </p>
         <div className="mt-4 grid gap-3">
-          <h3 className="text-sm font-medium">Sources</h3>
-          <CitationList
-            citations={response.citations}
-            emptyMessage="This answer arrived with no citations, which is a defect in the service rather than a source-free answer."
-          />
+          <CrossProductSummary response={response} />
         </div>
       </CardContent>
     </Card>
