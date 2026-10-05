@@ -256,7 +256,7 @@ async def _answer(
     settings = get_settings()
     started = time.perf_counter() if started_unix is None else started_unix
     stages_ms: dict[str, int] = {}
-    trace: dict[str, Any] = {}
+    trace_data: dict[str, Any] = {}
 
     if reranker is None:
         from app.retrieval.reranker import get_reranker
@@ -418,6 +418,15 @@ async def _answer(
     decision = gate_evidence(reranked, thresholds=settings, selected=evidence)
     if not evidence or decision.refused:
         _stream_refusal_through(emit)
+        if inspect:
+            trace_data.update(
+                {
+                    "retrieval": {"queries": queries_executed, "widened": widened, "candidates": []},
+                    "reranking": {"model": settings.pinecone_rerank_model, "submitted": len(all_candidates), "candidates": []},
+                    "generation": {"attempts": 0, "verification": None},
+                    "citations": {"valid": 0, "stripped": 0, "repaired": 0, "rejected_identifiers": [], "granularity": "none"},
+                }
+            )
         return _refused(
             request_id=request_id,
             question=question,
@@ -432,7 +441,7 @@ async def _answer(
             },
             leads=build_leads(reranked, limit=LEAD_LIMIT),
             total_ms=int((time.perf_counter() - started) * 1000),
-            trace=trace if inspect else None,
+            trace=trace_data if inspect else None,
             query_analysis=query_analysis_payload,
             stages_ms=stages_ms,
             emit=emit,
@@ -479,15 +488,12 @@ async def _answer(
     if provider_error is not None or generated is None:
         _stream_refusal_through(emit)
         if inspect:
+            trace_data.setdefault("generation", {})["attempts"] = attempts
+            trace_data.setdefault("generation", {})["provider_error"] = provider_error
             # A refusal whose cause is invisible is a support ticket. The text is
             # the provider's own message, never the user's question and never
             # anything from the corpus, so it is safe to show to the operator who
             # asked for inspection and never part of a normal response.
-            trace["generation"] = {
-                "attempts": attempts,
-                "verification": None,
-                "provider_error": provider_error,
-            }
         return _refused(
             request_id=request_id,
             question=question,
@@ -502,7 +508,7 @@ async def _answer(
             },
             leads=[],
             total_ms=int((time.perf_counter() - started) * 1000),
-            trace=trace if inspect else None,
+            trace=trace_data if inspect else None,
             query_analysis=query_analysis_payload,
             stages_ms=stages_ms,
             emit=emit,
@@ -538,7 +544,7 @@ async def _answer(
                 for u in evidence[:3]
             ],
             total_ms=int((time.perf_counter() - started) * 1000),
-            trace=trace if inspect else None,
+            trace=trace_data if inspect else None,
             query_analysis=query_analysis_payload,
             stages_ms=stages_ms,
             emit=emit,
@@ -585,6 +591,25 @@ async def _answer(
         # model marks claims in about half its answers, and refusing the rest would
         # refuse half of all answerable questions over a formatting habit while
         # their citations resolved exactly as well.
+        if inspect:
+            trace_data.update(
+                {
+                    "retrieval": {"queries": queries_executed, "widened": widened, "candidates": []},
+                    "reranking": {"model": settings.pinecone_rerank_model, "submitted": len(all_candidates), "candidates": []},
+                    "generation": {
+                        "attempts": attempts,
+                        "verification": verification.classification if verification else None,
+                        "answerable": generated.answerable,
+                    },
+                    "citations": {
+                        "valid": 0,
+                        "stripped": 0,
+                        "repaired": 0,
+                        "rejected_identifiers": markers.rejected,
+                        "granularity": "none",
+                    },
+                }
+            )
         return _refused(
             request_id=request_id,
             question=question,
@@ -599,7 +624,7 @@ async def _answer(
             },
             leads=[],
             total_ms=int((time.perf_counter() - started) * 1000),
-            trace=trace if inspect else None,
+            trace=trace_data if inspect else None,
             query_analysis=query_analysis_payload,
             stages_ms=stages_ms,
             emit=emit,
@@ -642,23 +667,55 @@ async def _answer(
     ]
 
     if inspect:
-        trace["citations"] = {
-            **trace.get("citations", {}),
-            "unresolved_markers": markers.rejected,
-            # `per_claim` or `list`: whether each claim named its own source, or
-            # the sources were named once at the end. Recorded either way.
-            "granularity": granularity,
+        # NOTE: no unit text anywhere below. Page text is not stored in this
+        # database by design (the registry holds provenance, the store holds the
+        # text), and the trace persists into query_logs — so it carries ids,
+        # counts and scores, never the corpus itself.
+        trace_data["retrieval"] = {
+            "queries": queries_executed,
+            "applied_filters": applied_filters,
+            "widened": widened,
+            "candidates": [
+                {
+                    "id": c.id,
+                    "product": c.product,
+                    "category": c.category,
+                    "retrieval_score": c.retrieval_score,
+                }
+                for c in all_candidates
+            ],
         }
-        trace["generation"] = {
+        trace_data["reranking"] = {
+            "model": settings.pinecone_rerank_model,
+            "submitted": len(all_candidates),
+            "candidates": [
+                {
+                    "id": r.id,
+                    "retrieval_score": r.retrieval_score,
+                    "rerank_score": r.rerank_score,
+                    "rank": r.rank,
+                }
+                for r in reranked
+            ],
+        }
+        trace_data["generation"] = {
             "attempts": attempts,
             "verification": verification.classification if verification else None,
             "verified_reason": verification.reason if verification else None,
         }
-        trace["citations"] = {
+        trace_data["citations"] = {
             "valid": sum(1 for c in validation.citations if c.validation_state == "valid"),
             "stripped": validation.stripped,
             "repaired": validation.repaired,
             "rejected_identifiers": validation.rejected_identifiers,
+            "unresolved_markers": markers.rejected,
+            # `per_claim` or `list`: whether each claim named its own source, or
+            # the sources were named once at the end. Recorded either way.
+            "granularity": granularity,
+            "evidence": [
+                {"id": u.hit.id, "product": u.product, "rerank_score": u.rerank_score}
+                for u in evidence
+            ],
         }
 
     payload: dict[str, Any] = {
@@ -670,8 +727,8 @@ async def _answer(
         "timing": {"total_ms": int((time.perf_counter() - started) * 1000), "stages_ms": stages_ms},
         "query_analysis": query_analysis_payload,
     }
-    if trace:
-        payload["trace"] = trace
+    if inspect:
+        payload["trace"] = trace_data
 
     if emit is not None:
         emit.emit(

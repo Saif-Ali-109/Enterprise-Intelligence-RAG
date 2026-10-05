@@ -18,11 +18,11 @@
  * `unavailable-panel`, which names the request id so the failure can be found in a
  * log and in its `query_logs` row (Principle II).
  *
- * **Progress is announced once, in words.** A question takes seconds because
- * retrieval and reranking are the slow parts; the panel says which stage it is in
- * from the response's own `timing` map once it has one, and says "working" until
- * then. Announcing a counter every second would make the wait worse (FR-035's
- * first-update budget is about the stream, which this path does not use yet).
+ * **Progress streams.** A question takes seconds because retrieval and reranking
+ * are the slow parts, and the panel says which stage it is in from the stream
+ * itself — a device that had to guess would tell an inattentive reader the
+ * wrong one. The answer completes through the identical `run_chat` pipeline the
+ * JSON endpoint serves, and only the transport is the stream.
  *
  * **History is bounded and sent, not faked.** The contract allows ten prior
  * turns; the panel keeps them in memory for the session and sends them with the
@@ -32,25 +32,29 @@
  */
 import { useState } from "react";
 import type { AskResponse } from "@/lib/api-client";
-import { QUESTION_MAX_LENGTH, useAsk } from "@/hooks/useChat";
+import { QUESTION_MAX_LENGTH } from "@/hooks/useChat";
+import { useAskStream } from "@/hooks/useAskStream";
 import { withCitationLinks } from "@/components/chat/citation-links";
 import { CrossProductSummary } from "@/components/chat/cross-product-summary";
 import { describeSources, summariseSources } from "@/components/chat/source-summary";
 import { RefusalPanel } from "@/components/chat/refusal-panel";
 import { UnavailablePanel } from "@/components/chat/unavailable-panel";
+import { ProgressIndicator } from "@/components/chat/progress-indicator";
+import { LiveRegion } from "@/lib/live-region";
+import { InspectionTrace } from "@/components/inspection/inspection-trace";
 import { Textarea } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export function ChatPanel() {
   const [question, setQuestion] = useState("");
-  const [response, setResponse] = useState<AskResponse | null>(null);
   const [history, setHistory] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
-  const ask = useAsk();
+  const [inspect, setInspect] = useState(false);
+  const stream = useAskStream();
 
   const trimmed = question.trim();
   const tooLong = question.length > QUESTION_MAX_LENGTH;
-  const canAsk = trimmed !== "" && !tooLong && !ask.isPending;
+  const canAsk = trimmed !== "" && !tooLong && !stream.state.isStreaming;
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -58,22 +62,11 @@ export function ChatPanel() {
       return;
     }
     const asked = trimmed;
-    setResponse(null);
-    ask.mutate(
-      { question: asked, history: history.slice(-10) },
-      {
-        onSuccess: (answer) => {
-          setResponse(answer);
-          setHistory((previous) => {
-            const next = [...previous, { role: "user" as const, content: asked }];
-            if (answer.answer !== null) {
-              next.push({ role: "assistant" as const, content: answer.answer });
-            }
-            return next;
-          });
-        },
-      },
-    );
+    stream.ask(asked, { inspect, history: history.slice(-10) });
+    setHistory((previous) => {
+      const next = [...previous, { role: "user" as const, content: asked }];
+      return next;
+    });
   }
 
   return (
@@ -107,32 +100,40 @@ export function ChatPanel() {
                 ? `${question.length} characters; the limit is ${QUESTION_MAX_LENGTH}.`
                 : `${question.length} of ${QUESTION_MAX_LENGTH} characters.`}
             </p>
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={inspect}
+                onChange={(event) => setInspect(event.target.checked)}
+                className="h-4 w-4"
+              />
+              Show the pipeline trace
+            </label>
             <div>
               <Button type="submit" disabled={!canAsk}>
-                {ask.isPending ? "Working…" : "Ask"}
+                {stream.state.isStreaming ? "Working…" : "Ask"}
               </Button>
             </div>
           </form>
         </CardContent>
       </Card>
 
-      {/*
-        The live region is polite and only ever announces the outcome word. A
-        question's answer is a document, and a screen reader reading it as it is
-        written would be interrupted mid-sentence; the announcement is the
-        arrival, and the content is read on request.
-      */}
-      <div aria-live="polite" aria-busy={ask.isPending} className="contents">
-        {ask.isPending ? (
-          <p className="text-sm text-muted-foreground">
-            Searching the indexed documentation and preparing an answer…
-          </p>
-        ) : null}
+      <LiveRegion
+        announcement={stream.state.announcement}
+        politeness={stream.state.announcementPoliteness}
+        busy={stream.state.isStreaming}
+      />
 
-        {ask.isError ? <UnavailablePanel error={ask.error} /> : null}
+      <ProgressIndicator stage={stream.state.stage} />
 
-        {response !== null ? <AnswerRegion response={response} /> : null}
-      </div>
+      {stream.state.fault !== null ? <UnavailablePanel error={new Error(stream.state.fault)} /> : null}
+
+      {stream.state.result !== null ? (
+        <div className="grid gap-4">
+          <AnswerRegion response={stream.state.result} />
+          {inspect ? <InspectionTrace frames={stream.state.frames} /> : null}
+        </div>
+      ) : null}
     </div>
   );
 }
