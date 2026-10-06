@@ -96,7 +96,9 @@ async def truncate_all() -> None:
     from sqlalchemy import text
 
     async with get_engine().begin() as connection:
-        await connection.execute(text("TRUNCATE sources CASCADE"))
+        await connection.execute(
+            text("TRUNCATE sources, evaluation_questions, evaluation_runs CASCADE")
+        )
 
 
 def describe_connection_failure() -> str:

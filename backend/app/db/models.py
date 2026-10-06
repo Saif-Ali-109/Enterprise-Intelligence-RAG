@@ -694,6 +694,12 @@ class EvaluationRun(Base):
     gate_outcome: Mapped[str] = mapped_column(String, nullable=False)
     # `[]` when passing; otherwise which gate, its target, and its actual value.
     gate_failures: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    # Lifecycle, because a run is asynchronous. The contract's enum; there is no
+    # 'warning' or 'partial' — an outcome a reviewer can mistake for a softened
+    # one is how a failing run gets read as a pass.
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, default="queued", server_default="queued"
+    )
     corpus_document_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     corpus_unit_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -704,6 +710,10 @@ class EvaluationRun(Base):
 
     __table_args__ = (
         CheckConstraint("gate_outcome IN ('pass', 'fail')", name="ck_evaluation_runs_gate_outcome"),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'completed', 'failed')",
+            name="ck_evaluation_runs_status_valid",
+        ),
         CheckConstraint(
             "question_count >= 0", name="ck_evaluation_runs_question_count_non_negative"
         ),

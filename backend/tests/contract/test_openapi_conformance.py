@@ -164,16 +164,11 @@ def _paths(document: dict[str, Any]) -> set[str]:
 #:   built_or_tracked`), so a new contract path cannot be quietly skipped.
 #: Contract paths with no implementation yet, and the task that owns them.
 #:
-#: `/chat` and `/chat/{request_id}` left this list on 2026-10-04 (T090), and
-#: `/chat/stream` on 2026-10-05 (T127). Both departures are what
-#: `test_the_pending_list_contains_no_endpoint_that_already_works` exists to
-#: catch: an entry that no longer describes anything is a list nobody reads.
-_PENDING = {
-    "/evaluations/dataset": "T148",
-    "/evaluations/runs": "T148",
-    "/evaluations/runs/{run_id}": "T148",
-    "/evaluations/runs/{run_id}/results": "T148",
-}
+#: `/chat` and `/chat/{request_id}` left this list on 2026-10-04 (T090), `/chat/stream`
+#: on 2026-10-05 (T127), and the four evaluation paths on 2026-10-06 (T148). Every
+#: contract path is now implemented, so the list is expected to stay empty —
+#: a non-empty entry is the signal to ask why, not to ignore the message.
+_PENDING: dict[str, str] = {}
 
 
 class TestPathAgreement:
