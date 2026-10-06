@@ -35,9 +35,10 @@ export interface AskStreamState {
   frames: StreamFrameRecord[];
   /** The human sentence for the stage in progress, or null once finished. */
   stage: string | null;
-  /** What the live region announces *now*; one sentence, not a log. */
-  announcement: string | null;
-  announcementPoliteness: "polite" | "assertive" | null;
+  /** Last polite announcement, for the polite region (which persists). */
+  politeAnnouncement: string | null;
+  /** Last assertive announcement, for the assertive region (outcome or fault). */
+  assertiveAnnouncement: string | null;
   /** The answer or refusal, present exactly once, after the terminal frame. */
   result: AskResponse | null;
   /** A transport-level fault (not a refusal): status refused, network died. */
@@ -100,8 +101,8 @@ export function useAskStream() {
     isStreaming: false,
     frames: [],
     stage: null,
-    announcement: null,
-    announcementPoliteness: null,
+    politeAnnouncement: null,
+    assertiveAnnouncement: null,
     result: null,
     fault: null,
   });
@@ -122,8 +123,8 @@ export function useAskStream() {
       isStreaming: true,
       frames: [],
       stage: "Searching the indexed documentation…",
-      announcement: "Question received",
-      announcementPoliteness: "polite",
+      politeAnnouncement: "Question received",
+      assertiveAnnouncement: null,
       result: null,
       fault: null,
     });
@@ -160,8 +161,14 @@ export function useAskStream() {
               ...previous,
               frames: [...previous.frames, { name: frame.name, data }],
               stage: stageFor(frame.name),
-              announcement: announcement?.text ?? null,
-              announcementPoliteness: announcement?.politeness ?? null,
+              politeAnnouncement:
+                announcement?.politeness === "polite"
+                  ? announcement.text
+                  : previous.politeAnnouncement,
+              assertiveAnnouncement:
+                announcement?.politeness === "assertive"
+                  ? announcement.text
+                  : previous.assertiveAnnouncement,
             }));
             if (frame.name === "answer_completed") {
               setState((previous) => ({

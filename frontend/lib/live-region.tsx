@@ -19,25 +19,31 @@
  * terminal answer or error has not yet arrived.
  */
 export function LiveRegion({
-  announcement,
-  politeness,
+  politeAnnouncement,
+  assertiveAnnouncement,
   busy,
 }: {
-  announcement: string | null;
-  politeness: "polite" | "assertive" | null;
+  politeAnnouncement: string | null;
+  assertiveAnnouncement: string | null;
   busy: boolean;
 }) {
+  // Two regions, not one region whose aria-live flips: flipping politeness on a
+  // single live region is unreliable in some assistive technology, and the polite
+  // history should survive the outcome rather than be overwritten by it.
   return (
-    <div
-      aria-live={politeness ?? "polite"}
-      aria-busy={busy}
-      // Associated With `voiceOff` rather than being a default read, and hidden
-      // from visual layout: the region exists for assistive technology.
-      className="sr-only"
-      role="status"
-      aria-label="Progress"
-    >
-      {announcement ?? ""}
-    </div>
+    <>
+      <div
+        aria-live="polite"
+        aria-busy={busy}
+        className="sr-only"
+        role="status"
+        aria-label="Progress"
+      >
+        {politeAnnouncement ?? ""}
+      </div>
+      <div aria-live="assertive" className="sr-only" role="alert" aria-label="Outcome">
+        {assertiveAnnouncement ?? ""}
+      </div>
+    </>
   );
 }

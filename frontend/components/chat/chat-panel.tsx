@@ -119,8 +119,8 @@ export function ChatPanel() {
       </Card>
 
       <LiveRegion
-        announcement={stream.state.announcement}
-        politeness={stream.state.announcementPoliteness}
+        politeAnnouncement={stream.state.politeAnnouncement}
+        assertiveAnnouncement={stream.state.assertiveAnnouncement}
         busy={stream.state.isStreaming}
       />
 
