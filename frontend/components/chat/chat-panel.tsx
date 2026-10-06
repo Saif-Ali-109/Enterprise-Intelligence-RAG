@@ -12,17 +12,17 @@
  * be made.
  *
  * **A refusal is a first-class state, not an error.** `POST /chat` answers a
- * refusal with HTTP 200, so this panel renders it from the same success path, in
- * its own region, with what was searched and any clearly-labelled leads. Only a
- * genuine fault (5xx, unreachable service, a cancelled request) reaches the error
- * region, and that region names the request id so the failure can be found in a
- * log (Principle II).
+ * refusal with HTTP 200, so this panel renders it from the same success path and
+ * hands it to `refusal-panel`, which has its own region and no error wording. Only
+ * a genuine fault (5xx, unreachable service, a cancelled request) reaches
+ * `unavailable-panel`, which names the request id so the failure can be found in a
+ * log and in its `query_logs` row (Principle II).
  *
- * **Progress is announced once, in words.** A question takes seconds because
- * retrieval and reranking are the slow parts; the panel says which stage it is in
- * from the response's own `timing` map once it has one, and says "working" until
- * then. Announcing a counter every second would make the wait worse (FR-035's
- * first-update budget is about the stream, which this path does not use yet).
+ * **Progress streams.** A question takes seconds because retrieval and reranking
+ * are the slow parts, and the panel says which stage it is in from the stream
+ * itself — a device that had to guess would tell an inattentive reader the
+ * wrong one. The answer completes through the identical `run_chat` pipeline the
+ * JSON endpoint serves, and only the transport is the stream.
  *
  * **History is bounded and sent, not faked.** The contract allows ten prior
  * turns; the panel keeps them in memory for the session and sends them with the
@@ -31,22 +31,30 @@
  * answers `NOT_FOUND`, so it cannot.
  */
 import { useState } from "react";
-import { describeError, type AskResponse } from "@/lib/api-client";
-import { QUESTION_MAX_LENGTH, describeRefusal, useAsk } from "@/hooks/useChat";
-import { CitationList } from "@/components/chat/citation-list";
+import type { AskResponse } from "@/lib/api-client";
+import { QUESTION_MAX_LENGTH } from "@/hooks/useChat";
+import { useAskStream } from "@/hooks/useAskStream";
+import { withCitationLinks } from "@/components/chat/citation-links";
+import { CrossProductSummary } from "@/components/chat/cross-product-summary";
+import { describeSources, summariseSources } from "@/components/chat/source-summary";
+import { RefusalPanel } from "@/components/chat/refusal-panel";
+import { UnavailablePanel } from "@/components/chat/unavailable-panel";
+import { ProgressIndicator } from "@/components/chat/progress-indicator";
+import { LiveRegion } from "@/lib/live-region";
+import { InspectionTrace } from "@/components/inspection/inspection-trace";
 import { Textarea } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export function ChatPanel() {
   const [question, setQuestion] = useState("");
-  const [response, setResponse] = useState<AskResponse | null>(null);
   const [history, setHistory] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
-  const ask = useAsk();
+  const [inspect, setInspect] = useState(false);
+  const stream = useAskStream();
 
   const trimmed = question.trim();
   const tooLong = question.length > QUESTION_MAX_LENGTH;
-  const canAsk = trimmed !== "" && !tooLong && !ask.isPending;
+  const canAsk = trimmed !== "" && !tooLong && !stream.state.isStreaming;
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -54,22 +62,11 @@ export function ChatPanel() {
       return;
     }
     const asked = trimmed;
-    setResponse(null);
-    ask.mutate(
-      { question: asked, history: history.slice(-10) },
-      {
-        onSuccess: (answer) => {
-          setResponse(answer);
-          setHistory((previous) => {
-            const next = [...previous, { role: "user" as const, content: asked }];
-            if (answer.answer !== null) {
-              next.push({ role: "assistant" as const, content: answer.answer });
-            }
-            return next;
-          });
-        },
-      },
-    );
+    stream.ask(asked, { inspect, history: history.slice(-10) });
+    setHistory((previous) => {
+      const next = [...previous, { role: "user" as const, content: asked }];
+      return next;
+    });
   }
 
   return (
@@ -103,44 +100,40 @@ export function ChatPanel() {
                 ? `${question.length} characters; the limit is ${QUESTION_MAX_LENGTH}.`
                 : `${question.length} of ${QUESTION_MAX_LENGTH} characters.`}
             </p>
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={inspect}
+                onChange={(event) => setInspect(event.target.checked)}
+                className="h-4 w-4"
+              />
+              Show the pipeline trace
+            </label>
             <div>
               <Button type="submit" disabled={!canAsk}>
-                {ask.isPending ? "Working…" : "Ask"}
+                {stream.state.isStreaming ? "Working…" : "Ask"}
               </Button>
             </div>
           </form>
         </CardContent>
       </Card>
 
-      {/*
-        The live region is polite and only ever announces the outcome word. A
-        question's answer is a document, and a screen reader reading it as it is
-        written would be interrupted mid-sentence; the announcement is the
-        arrival, and the content is read on request.
-      */}
-      <div aria-live="polite" aria-busy={ask.isPending} className="contents">
-        {ask.isPending ? (
-          <p className="text-sm text-muted-foreground">
-            Searching the indexed documentation and preparing an answer…
-          </p>
-        ) : null}
+      <LiveRegion
+        politeAnnouncement={stream.state.politeAnnouncement}
+        assertiveAnnouncement={stream.state.assertiveAnnouncement}
+        busy={stream.state.isStreaming}
+      />
 
-        {ask.isError ? (
-          <Card labelledBy="ask-error-heading">
-            <CardHeader>
-              <CardTitle id="ask-error-heading">The question could not be completed</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm">{describeError(ask.error)}</p>
-              <p className="mt-2 text-xs text-muted-foreground">
-                No answer was returned, and nothing was substituted for one.
-              </p>
-            </CardContent>
-          </Card>
-        ) : null}
+      <ProgressIndicator stage={stream.state.stage} />
 
-        {response !== null ? <AnswerRegion response={response} /> : null}
-      </div>
+      {stream.state.fault !== null ? <UnavailablePanel error={new Error(stream.state.fault)} /> : null}
+
+      {stream.state.result !== null ? (
+        <div className="grid gap-4">
+          <AnswerRegion response={stream.state.result} />
+          {inspect ? <InspectionTrace frames={stream.state.frames} /> : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -148,13 +141,14 @@ export function ChatPanel() {
 /**
  * One response, rendered.
  *
- * Split from `ChatPanel` so the three states — answered, refused, faulted — are
- * separate code with no shared branch that could render an answer without its
- * citations.
+ * Split from `ChatPanel` so the two outcomes are separate code with no shared
+ * branch that could render an answer without its citations: the refusal goes
+ * straight to `RefusalPanel`, and only the answered branch reaches the answer
+ * text *and* the citation list below it.
  */
 function AnswerRegion({ response }: { response: AskResponse }) {
   if (response.outcome === "refused") {
-    return <RefusalRegion response={response} />;
+    return <RefusalPanel response={response} />;
   }
 
   return (
@@ -170,95 +164,28 @@ function AnswerRegion({ response }: { response: AskResponse }) {
       <CardContent>
         {/*
           `answer` is non-null exactly when `outcome` is `answered`; the fallback
-          sentence exists so a malformed response cannot render an empty box
-          that reads as "nothing to say".
+          sentence exists so a malformed response cannot render an empty box that
+          reads as "nothing to say". The `[n]` markers inside it are the citation
+          ranks the service resolved from the model's inline markers, and they are
+          rendered as links to the citation they name — so a claim and its evidence
+          are one click apart, which is the point of FR-002.
         */}
+        {/*
+          How many sources and domains contributed, counted from the validated
+          citations rather than reported by the service (T117): the contract has no
+          source-count field, and a count derived from the citations cannot
+          disagree with them.
+        */}
+        <p className="text-xs text-muted-foreground">{describeSources(summariseSources(response.citations))}</p>
         <p className="whitespace-pre-wrap text-sm leading-relaxed">
-          {response.answer ?? "The service returned an answer with no text."}
+          {withCitationLinks(
+            response.answer ?? "The service returned an answer with no text.",
+            response.citations.length,
+          )}
         </p>
         <div className="mt-4 grid gap-3">
-          <h3 className="text-sm font-medium">Sources</h3>
-          <CitationList
-            citations={response.citations}
-            emptyMessage="This answer arrived with no citations, which is a defect in the service rather than a source-free answer."
-          />
+          <CrossProductSummary response={response} />
         </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-/**
- * A refusal, rendered as a refusal (FR-008).
- *
- * It says what was searched — the queries, the products, the candidates found —
- * because "the system would not answer" without that is a dead end, and it offers
- * weakly related sources as *leads*, each already carrying `insufficient: true` so
- * nothing here can be mistaken for support for a claim.
- */
-function RefusalRegion({ response }: { response: AskResponse }) {
-  const searched = response.searched;
-
-  return (
-    <Card labelledBy="refusal-heading">
-      <CardHeader>
-        <CardTitle id="refusal-heading">Not answered</CardTitle>
-        <p className="text-sm">{describeRefusal(response.refusal_reason)}</p>
-      </CardHeader>
-      <CardContent>
-        <p className="text-sm">
-          {`Asked: ${response.question}`}
-          <span aria-hidden="true"> · </span>
-          {`request ${response.request_id}`}
-        </p>
-
-        {searched ? (
-          <dl className="mt-4 grid gap-2 text-xs">
-            <div className="grid gap-0.5">
-              <dt className="font-medium">Searched</dt>
-              <dd className="text-muted-foreground">{searched.queries.join(" · ")}</dd>
-            </div>
-            <div className="grid gap-0.5">
-              <dt className="font-medium">Products considered</dt>
-              <dd className="text-muted-foreground">
-                {searched.products.filter((p): p is string => p !== null).join(", ") || "none identified"}
-              </dd>
-            </div>
-            <div className="grid gap-0.5">
-              <dt className="font-medium">Evidence found</dt>
-              <dd className="text-muted-foreground">
-                {`${searched.candidates_retrieved} candidates retrieved, ${searched.candidates_reranked} reranked, ${searched.evidence_selected} selected`}
-              </dd>
-            </div>
-          </dl>
-        ) : null}
-
-        {response.leads.length > 0 ? (
-          <div className="mt-4 grid gap-2">
-            <h3 className="text-sm font-medium">Possibly related, not sufficient</h3>
-            <ul className="grid gap-2">
-              {response.leads.map((lead) => (
-                <li key={lead.source_url} className="text-xs">
-                  <a
-                    href={lead.source_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="underline underline-offset-4 hover:no-underline"
-                  >
-                    {lead.title}
-                  </a>
-                  <span className="ml-2 text-muted-foreground">
-                    {lead.insufficient ? "not sufficient for this question" : ""}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-
-        <p className="mt-4 text-xs text-muted-foreground">
-          A refusal is a result, not a failure: nothing was guessed in its place.
-        </p>
       </CardContent>
     </Card>
   );

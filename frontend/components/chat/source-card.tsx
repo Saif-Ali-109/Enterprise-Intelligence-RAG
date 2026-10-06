@@ -69,7 +69,7 @@ export function SourceCard({ citation, index, children }: SourceCardProps) {
 
   return (
     <article
-      className="rounded-md border bg-card p-4 text-sm"
+      className="scroll-mt-6 rounded-md border bg-card p-4 text-sm"
       aria-label={`Source ${index}: ${citation.title}`}
     >
       <div className="flex flex-wrap items-center gap-2">

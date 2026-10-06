@@ -28,6 +28,7 @@ from typing import Any
 from app.core.config import DocumentCategory, ProductDomain, QuestionIntent, get_settings
 from app.core.errors import ProviderError  # re-exported for the fake providers in tests
 from app.generation.provider import LLMProvider
+from app.retrieval.ambiguity import resolve_ambiguity
 
 _PRODUCT_VALUES = {m.value for m in ProductDomain}
 _INTENT_VALUES = {m.value for m in QuestionIntent}
@@ -72,6 +73,11 @@ class QueryAnalysis:
     intent: str | None
     entities: list[str] = field(default_factory=list)
     classification_confidence: dict[str, float] = field(default_factory=dict)
+    #: Every product the question names, and whether it spans more than one
+    #: (edge case 13). `ambiguity_note` is the sentence a client shows; a null
+    #: here means the question named one product or none.
+    named_products: list[str] = field(default_factory=list)
+    ambiguity_note: str | None = None
 
 
 def _in_vocabulary(value: Any, valid: set[str]) -> str | None:
@@ -151,6 +157,12 @@ async def analyze_question(
         if isinstance(raw_entities, list) and entities_conf >= threshold:
             entities = [e.strip() for e in raw_entities if isinstance(e, str) and e.strip()]
 
+    # Ambiguity is decided from the question's own words, not from the model's
+    # confidence: a question that names two products is cross-product even when
+    # the classifier is certain about one of them, and suppressing the product
+    # filter is what stops the other half going unsearched (edge case 13, FR-009).
+    ambiguity = resolve_ambiguity(question, product)
+
     return QueryAnalysis(
         original_question=question,
         detected_product=product,
@@ -163,6 +175,8 @@ async def analyze_question(
             "intent": intent_conf,
             "entities": entities_conf,
         },
+        named_products=ambiguity.products,
+        ambiguity_note=ambiguity.note,
     )
 
 

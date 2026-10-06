@@ -70,6 +70,23 @@ suppressed filter — its event is still emitted with a zero count. Emitting
 "nothing indexed yet" from "nothing relevant found", which the spec requires as distinct
 states.
 
+**Amended 2026-10-05, after the first live outage.** "No event is skipped within 1–7" is scoped
+to a pipeline that *runs*: it distinguishes a stage that produced nothing from a stage that was
+never reached. It does not extend to a stage that **failed**, and the two must not be conflated.
+Measured against a backend started with an invalid Pinecone key, a question against the real
+index emits:
+
+```text
+query_received, query_analyzed, retrieval_started, error, [DONE]
+```
+
+— three events and then `error`, with no `retrieval_completed`. Emitting
+`retrieval_completed: {candidates_retrieved: 0}` after an unreachable vector service would tell
+the client that retrieval completed and found nothing, which is the degraded-completion-as-success
+failure FR-061 and FR-062 exist to prevent. The zero-count rule applies to stages that ran; a
+stage that raised says so with `error`, and the client distinguishes the two states by which
+event it received.
+
 **No token deltas.** There is no `delta` event, and there will not be one. The provider does
 not support streaming together with structured output (R-007), so the generated answer is
 buffered and delivered whole in `answer_completed` with its citations intact. Progress is

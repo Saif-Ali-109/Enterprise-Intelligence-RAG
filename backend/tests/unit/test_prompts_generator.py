@@ -56,10 +56,42 @@ class TestPrompt:
         from app.generation.prompts import build_answer_prompt
 
         system, user = build_answer_prompt("How do I rotate a token?", _evidence())
-        assert "### ev-1" in user
+        assert "### [E1]" in user
+        assert "evidence_id: ev-1" in user
         assert "support.atlassian.com/api-tokens" in user
         assert "How do I rotate a token?" in user
         assert "may not" in system.lower() and "invent" in system.lower()
+
+    def test_the_prompt_demands_an_inline_marker_on_every_claim(self) -> None:
+        """FR-002 is per claim, so the marker rule is in the prompt, not implied."""
+        from app.generation.prompts import build_answer_prompt
+
+        system, _user = build_answer_prompt("How do I rotate a token?", _evidence())
+        assert "[E1]" in system
+        assert "every substantive claim" in system.lower()
+
+    def test_markers_are_numbered_from_one_in_order(self) -> None:
+        from app.generation.prompts import build_answer_prompt, marker_for
+
+        evidence = _evidence()
+        second = type(evidence[0])(
+            hit=type(evidence[0].hit)(
+                id="ev-2",
+                text=evidence[0].hit.text,
+                retrieval_score=0.4,
+                rerank_score=0.4,
+                rank=2,
+                metadata=evidence[0].hit.metadata,
+            ),
+            document_id="d2",
+            source_id="s1",
+            category="api-tokens",
+            page_type="doc",
+        )
+        _system, user = build_answer_prompt("q", [*evidence, second])
+
+        assert user.index("### [E1]") < user.index("### [E2]")
+        assert marker_for(1) == "E1"
 
     def test_refusal_prompt_is_stated(self) -> None:
         from app.generation.prompts import build_answer_prompt

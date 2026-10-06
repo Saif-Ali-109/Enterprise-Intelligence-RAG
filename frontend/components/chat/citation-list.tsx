@@ -39,9 +39,12 @@ export function CitationList({
   }
 
   return (
-    <ol className="grid gap-3" aria-label="Sources for this answer">
+    // `scroll-mt` because an in-page jump must not tuck the cited card under a
+    // sticky header, and `:target` gives the reader a flash of which source the
+    // marker they just followed actually was.
+    <ol className="grid gap-3 [&:target]:border-l-2 [&:target]:border-l-muted-foreground/60 [&:target]:pl-3" aria-label="Sources for this answer">
       {citations.map((citation) => (
-        <li key={citation.unit_id}>
+        <li key={citation.unit_id} id={`citation-${citation.rank}`}>
           <SourceCard citation={citation} index={citation.rank}>
             {/*
               The supporting span, quoted from the unit the citation names. It is
