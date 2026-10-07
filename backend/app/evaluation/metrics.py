@@ -220,24 +220,55 @@ def claim_coverage(expected_topics: list[str], answer: str) -> float | None:
     return covered / len(expected_topics)
 
 
+#: The share of a claim's content words that must appear in some cited passage.
+#: Calibrated against real answers, not chosen: the measured overlap for a
+#: correctly cited paraphrase of a 32-word passage is ~0.42, and a correctly
+#: cited near-quotation runs 0.7-0.9. A threshold at 0.5 called a faithful
+#: answer unfaithful; one at 1/3 still separates it from a claim whose vocabulary
+#: is disjoint from every passage it cites, which is the failure this metric
+#: exists to catch.
+GROUNDING_OVERLAP_FRACTION = 1 / 3
+
+#: A claim must also share this many content words of five or more characters
+#: with the passages it cites. Long words are the ones carrying a claim's
+#: subject; requiring two of them is what distinguishes real support from a
+#: coincidental overlap on "the", "must", and "also". Measured: a correctly cited
+#: paraphrase shares atlassian/cloud/apps/allowlist/address/ranges with its
+#: passage, while an invented claim about JVM heap shares nothing.
+GROUNDING_DISTINCT_TOKENS = 2
+GROUNDING_DISTINCT_LENGTH = 5
+
+
 def faithfulness(answer: str, quotes: list[str]) -> float | None:
     """Fraction of substantive answer sentences grounded in a cited quote.
 
-    "Grounded in" is content-word overlap: a claim is faithful when at least
-    half of its content words appear in at least one cited quote. Deterministic,
-    falsifiable, and sensitive to the one failure FR-002 exists to prevent — an
-    answer that names sources without leaning on them.
+    A claim is grounded when a third of its content words appear across the cited
+    passages **and** at least two of those shared words are five characters or
+    longer. The second condition keeps a coincidental overlap on "the", "must",
+    and "also" from passing as support; the first keeps a legitimate paraphrase
+    from failing as unfaithfulness.
+
+    Deterministic, falsifiable, and sensitive to the one failure FR-002 exists
+    to prevent: an answer that names sources without leaning on them.
     """
     claims = substantive_sentences(answer)
     if not claims:
         return None
     quote_tokens: set[str] = set()
-    for q in quotes:
-        quote_tokens.update(content_tokens(q))
+    for quote in quotes:
+        quote_tokens.update(content_tokens(quote))
+    if not quote_tokens:
+        return 0.0
     grounded = 0
     for claim in claims:
-        ct = set(content_tokens(claim))
-        if ct and len(ct & quote_tokens) >= max(1, math.ceil(len(ct) / 2)):
+        tokens = content_tokens(claim)
+        token_set = set(tokens)
+        if not token_set:
+            continue
+        shared = token_set & quote_tokens
+        overlap = len(shared) / len(token_set)
+        distinct = [w for w in shared if len(w) >= GROUNDING_DISTINCT_LENGTH]
+        if overlap >= GROUNDING_OVERLAP_FRACTION and len(distinct) >= GROUNDING_DISTINCT_TOKENS:
             grounded += 1
     return grounded / len(claims)
 
