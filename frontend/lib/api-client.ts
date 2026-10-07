@@ -381,6 +381,83 @@ export interface CrawlJob {
 }
 
 // ============================================================================
+// Evaluation
+// ============================================================================
+
+export type EvaluationRunStatus = "queued" | "running" | "completed" | "failed";
+
+/**
+ * The metric block is null until a run has finished (FR-036).
+ *
+ * `null` and `0` are different claims: `null` is "this run has no number here",
+ * `0` is "the measurement said zero". The dashboard renders them differently, so
+ * the client keeps them apart instead of coalescing.
+ */
+export interface EvaluationMetrics {
+  recall_at_5: number | null;
+  precision_at_5: number | null;
+  mrr: number | null;
+  cross_product_domain_coverage: number | null;
+  citation_validity: number | null;
+  claim_coverage: number | null;
+  faithfulness: number | null;
+  unsupported_refusal_rate: number | null;
+  /** A count, never a ratio (FR-066). */
+  fabricated_fact_count: number | null;
+  /** A count, never a ratio (FR-066). */
+  invalid_citation_count: number | null;
+  p50_latency_ms: number | null;
+  p95_latency_ms: number | null;
+  error_rate: number | null;
+}
+
+export interface EvaluationGateFailure {
+  gate: string;
+  target: number;
+  actual: number;
+}
+
+export interface EvaluationRun {
+  id: string;
+  dataset_version: string;
+  dataset_fingerprint: string;
+  status: EvaluationRunStatus;
+  started_at: string | null;
+  finished_at: string | null;
+  question_count: number;
+  metrics: EvaluationMetrics | null;
+  thresholds: Record<string, number>;
+  gate_outcome: "pass" | "fail";
+  gate_failures: EvaluationGateFailure[];
+}
+
+export interface EvaluationResult {
+  question_id: string;
+  question: string | null;
+  category: string | null;
+  difficulty: string | null;
+  recall_at_5: number | null;
+  precision_at_5: number | null;
+  mrr: number | null;
+  citation_validity: number | null;
+  claim_coverage: number | null;
+  faithfulness: number | null;
+  refused: boolean;
+  fabricated_fact_count: number;
+  invalid_citation_count: number;
+  latency_ms: number | null;
+  error: string | null;
+}
+
+export interface EvaluationQuestion {
+  id: string;
+  question: string;
+  category: string;
+  difficulty: string;
+  is_unsupported: boolean;
+}
+
+// ============================================================================
 // The request
 // ============================================================================
 
@@ -647,6 +724,43 @@ export const chat = {
 
   get(requestId: string, signal?: AbortSignal): Promise<AskResponse> {
     return send<AskResponse>(`/chat/${encodeURIComponent(requestId)}`, { signal });
+  },
+};
+
+/**
+ * Evaluation.
+ *
+ * A run is asynchronous, so `start` returns a row whose `status` is still
+ * `running` and whose `metrics` is still null. That is the contract's answer,
+ * not a gap in the client: the dashboard polls `get` until `status` leaves the
+ * in-flight states, and shows nothing quantitative before then.
+ */
+export const evaluations = {
+  dataset(signal?: AbortSignal): Promise<{ dataset_version: string; questions: EvaluationQuestion[] }> {
+    return send<{ dataset_version: string; questions: EvaluationQuestion[] }>("/evaluations/dataset", {
+      signal,
+    });
+  },
+
+  listRuns(request: PageRequest = {}, signal?: AbortSignal): Promise<Page<EvaluationRun>> {
+    return send<Page<EvaluationRun>>(`/evaluations/runs${query(request)}`, { signal });
+  },
+
+  startRun(signal?: AbortSignal): Promise<EvaluationRun> {
+    return send<EvaluationRun>("/evaluations/runs", { method: "POST", signal });
+  },
+
+  getRun(runId: string, signal?: AbortSignal): Promise<EvaluationRun> {
+    return send<EvaluationRun>(`/evaluations/runs/${encodeURIComponent(runId)}`, { signal });
+  },
+
+  listResults(runId: string, request: PageRequest = {}, signal?: AbortSignal): Promise<
+    Page<EvaluationResult>
+  > {
+    return send<Page<EvaluationResult>>(
+      `/evaluations/runs/${encodeURIComponent(runId)}/results${query(request)}`,
+      { signal },
+    );
   },
 };
 

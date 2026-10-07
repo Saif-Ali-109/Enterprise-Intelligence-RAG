@@ -331,9 +331,9 @@ and confirm the empty state shows no numbers before any run exists. Quickstart s
 - [X] T146 [US6] Persist per-question results in `backend/app/evaluation/runner.py` — write an `evaluation_results` row per question so the absolute-zero counts are auditable to an individual question, not only to a run aggregate (data-model.md §1.2, SC-008, SC-009)
 - [X] T147 [P] [US6] Implement the evaluation schemas in `backend/app/schemas/evaluations.py` matching `contracts/openapi.yaml` — `EvaluationRun`, `EvaluationResult`, `EvaluationQuestion`, and `EvaluationDataset`
 - [X] T148 [US6] Implement `backend/app/api/routes_evaluations.py` — expose the dataset, start a run, fetch a run with its thresholds and gate outcome, and page through per-question results
-- [ ] T149 [US6] Write the evaluation dashboard in `frontend/app/evaluations/page.tsx` and `frontend/components/evaluations/eval-dashboard.tsx` — metrics grouped retrieval / answer / performance, each labelled with the run id and timestamp that produced it
-- [ ] T150 [P] [US6] Write the gate banner in `frontend/components/evaluations/gate-banner.tsx` — a failing gate is shown as a failing gate in plain language, never softened
-- [ ] T151 [US6] Write the empty state in `frontend/components/evaluations/empty-state.tsx` — explains that no run has been performed and renders **no** placeholder numbers anywhere (FR-037)
+- [X] T149 [US6] Write the evaluation dashboard in `frontend/app/evaluations/page.tsx` and `frontend/components/evaluations/eval-dashboard.tsx` — metrics grouped retrieval / answer / performance, each labelled with the run id and timestamp that produced it
+- [X] T150 [P] [US6] Write the gate banner in `frontend/components/evaluations/gate-banner.tsx` — a failing gate is shown as a failing gate in plain language, never softened
+- [X] T151 [US6] Write the empty state in `frontend/components/evaluations/empty-state.tsx` — explains that no run has been performed and renders **no** placeholder numbers anywhere (FR-037)
 - [ ] T152 [US6] Verify quickstart **V11** and **V12** end to end, including `backend/tests/integration/test_metrics_respond.py` proving the metrics move under a real configuration change
 
 **Checkpoint**: Quality is measured from real runs, is traceable to the run that produced it,
