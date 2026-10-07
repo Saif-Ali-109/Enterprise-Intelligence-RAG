@@ -224,8 +224,13 @@ async def execute_run(
             await _record_row(session, run_id, q, outcome)
             if error is None and payload is not None:
                 if q.category == "cross_product":
-                    searched = payload.get("searched") or {}
-                    products = {p for p in (searched.get("products") or []) if p}
+                    # `searched` is populated on the refusal path; an answered
+                    # response carries the evidence instead. The products this
+                    # question actually consulted are therefore read from
+                    # whichever of the two the response has — a cross-product
+                    # gate that only counted refusals would report coverage for
+                    # exactly the questions that produced no answer.
+                    products = _searched_products(payload)
                     cross_flags.append(len(products) >= 2)
                 if q.is_unsupported:
                     unsupported_total += 1
@@ -235,7 +240,12 @@ async def execute_run(
         metrics = _aggregate(
             per_question, cross_flags, unsupported_refused, unsupported_total, perf
         )
-        outcome_gate, failures = gate_outcome(metrics, run.thresholds)
+        # Re-read after the per-question commits: those expire the ORM instance,
+        # and touching an expired attribute outside a greenlet context raises
+        # MissingGreenlet rather than the value. Copying the thresholds into a
+        # plain dict here is what the run is judged against.
+        await session.refresh(run)
+        outcome_gate, failures = gate_outcome(metrics, dict(run.thresholds))
 
         run.metrics = metrics
         run.gate_outcome = outcome_gate
@@ -326,6 +336,22 @@ def _grade_question(
 
     per_question.append(result | {"category": q.category, "is_unsupported": q.is_unsupported})
     return result
+
+
+def _searched_products(payload: dict[str, Any]) -> set[str]:
+    """The products this question consulted, from either response shape."""
+    searched = payload.get("searched") or {}
+    products = {p for p in (searched.get("products") or []) if p}
+    if products:
+        return products
+    trace = payload.get("trace") or {}
+    for candidate in (trace.get("retrieval") or {}).get("candidates", []) or []:
+        if candidate.get("product"):
+            products.add(str(candidate["product"]))
+    for unit in (trace.get("citations") or {}).get("evidence", []) or []:
+        if unit.get("product"):
+            products.add(str(unit["product"]))
+    return products
 
 
 def _ranked_candidates(

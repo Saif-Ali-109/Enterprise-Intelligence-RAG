@@ -18,7 +18,6 @@ from collections.abc import AsyncIterator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
 
 from tests.fixtures.database import describe_connection_failure, migrate_to_head, truncate_all
 
@@ -153,7 +152,9 @@ class TestSourceViews:
         assert item["id"] == seeded["source_id"]
         assert item["page_count"] == 0, "a tombstoned document is not a live page"
 
-    async def test_the_empty_corpus_is_an_empty_list_not_an_error(self, client: AsyncClient) -> None:
+    async def test_the_empty_corpus_is_an_empty_list_not_an_error(
+        self, client: AsyncClient
+    ) -> None:
         for path in ("/api/v1/sources", "/api/v1/documents", "/api/v1/crawl-jobs"):
             response = await client.get(path)
             assert response.status_code == 200
@@ -212,9 +213,7 @@ class TestDocumentViews:
 
 
 class TestCrawlViews:
-    async def test_a_crawl_job_reports_counters_and_error_detail(
-        self, client: AsyncClient
-    ) -> None:
+    async def test_a_crawl_job_reports_counters_and_error_detail(self, client: AsyncClient) -> None:
         from app.db.models import CrawlJob
         from app.db.session import get_session_factory
 
