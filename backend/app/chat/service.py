@@ -237,6 +237,7 @@ async def run_chat(
         model=get_settings().groq_model,
         rerank_model=get_settings().pinecone_rerank_model,
         pipeline_trace=payload.get("trace"),
+        citations=payload.get("citations") or [],
     )
     return result
 
