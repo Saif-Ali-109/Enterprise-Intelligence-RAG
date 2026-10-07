@@ -96,8 +96,12 @@ async def truncate_all() -> None:
     from sqlalchemy import text
 
     async with get_engine().begin() as connection:
+        # `query_logs` is here because it has no foreign key to `sources`, so
+        # truncating `sources` never touched it: audit rows accumulated across
+        # suites, and a test that counts them was counting its own history.
+        # `citations` follows `query_logs` by cascade.
         await connection.execute(
-            text("TRUNCATE sources, evaluation_questions, evaluation_runs CASCADE")
+            text("TRUNCATE sources, query_logs, evaluation_questions, evaluation_runs CASCADE")
         )
 
 

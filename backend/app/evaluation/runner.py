@@ -26,6 +26,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.logging import new_request_id, reset_request_id, set_request_id
 from app.db.models import Document, DocumentUnit, EvaluationResult, EvaluationRun
 from app.db.session import get_session_factory
 from app.evaluation import metrics as m
@@ -202,18 +203,28 @@ async def execute_run(
             started = clock()
             error: str | None = None
             payload: dict[str, Any] | None = None
+            # A fresh request id per question. `run_chat` takes its id from the
+            # ambient context (FR-047), and this task inherited the context of the
+            # POST that started the run — so without this binding, all 32 audit
+            # writes collided on `query_logs`' primary key and 31 questions were
+            # left with no audit row at all. Measured live, then fixed; the
+            # regression test reproduces it by binding an ambient id first.
+            token = set_request_id(new_request_id())
             try:
-                chat_result = await run_chat(
-                    q.question,
-                    session=session,
-                    store=store,
-                    provider=provider,
-                    inspect=True,
-                    emit=None,
-                )
-                payload = chat_result.payload
-            except Exception as exc:  # noqa: BLE001 - one question never sinks the run
-                error = f"{type(exc).__name__}: {exc}"[:500]
+                try:
+                    chat_result = await run_chat(
+                        q.question,
+                        session=session,
+                        store=store,
+                        provider=provider,
+                        inspect=True,
+                        emit=None,
+                    )
+                    payload = chat_result.payload
+                except Exception as exc:  # noqa: BLE001 - one question never sinks the run
+                    error = f"{type(exc).__name__}: {exc}"[:500]
+            finally:
+                reset_request_id(token)
             latency_ms = int((clock() - started) * 1000)
             perf.total += 1
             perf.latencies_ms.append(latency_ms)

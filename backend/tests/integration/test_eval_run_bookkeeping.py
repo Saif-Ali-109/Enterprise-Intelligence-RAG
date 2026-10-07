@@ -92,7 +92,18 @@ async def _run_once() -> tuple[uuid.UUID, int]:
         run_id = run.id
         question_count = run.question_count
 
-    await execute_run(run_id, store=_EmptyStore(), provider=_ClassifierOnlyProvider())
+    # The ambient request id a POST /evaluations/runs leaves behind. Binding it
+    # here is what makes this test reproduce the production condition: without an
+    # ambient id, `run_chat` mints a fresh one per question and the collision
+    # cannot happen — which is exactly why the first version of this test passed
+    # against code that was broken in production.
+    from app.core.logging import new_request_id, reset_request_id, set_request_id
+
+    token = set_request_id(new_request_id())
+    try:
+        await execute_run(run_id, store=_EmptyStore(), provider=_ClassifierOnlyProvider())
+    finally:
+        reset_request_id(token)
     return run_id, question_count
 
 
