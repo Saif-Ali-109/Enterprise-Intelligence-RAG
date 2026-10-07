@@ -381,6 +381,65 @@ export interface CrawlJob {
 }
 
 // ============================================================================
+// Configuration and health
+// ============================================================================
+
+/** Presence only. There is deliberately no `value` anywhere in this shape. */
+export interface SecretPresence {
+  configured: boolean;
+}
+
+export interface CorpusSummary {
+  source_count: number;
+  document_count: number;
+  unit_count: number;
+  allowed_domains: string[];
+}
+
+export interface ConfigResponse {
+  retrieval: {
+    candidate_pool: number;
+    rerank_top_n: number;
+    evidence_min: number;
+    evidence_max: number;
+    filters_enabled: boolean;
+    min_rerank_score?: number;
+    min_evidence_score?: number;
+  };
+  generation: {
+    provider: string;
+    model: string;
+    classification_model: string;
+    max_attempts: number;
+    /** `const: false` in the contract — an operator can verify FR-034 live. */
+    reasoning_exposed: boolean;
+  };
+  index: {
+    name: string;
+    namespace: string;
+    embed_model: string;
+    dimension_source: string;
+    rerank_model: string;
+  };
+  corpus: CorpusSummary;
+  secrets: Record<string, SecretPresence>;
+}
+
+export type DependencyState = "ok" | "degraded" | "unavailable";
+
+export interface DependencyReport {
+  status: DependencyState;
+  detail: string | null;
+  latency_ms: number | null;
+}
+
+export interface HealthResponse {
+  status: DependencyState;
+  version: string | null;
+  dependencies: Record<string, DependencyReport>;
+}
+
+// ============================================================================
 // Evaluation
 // ============================================================================
 
@@ -724,6 +783,23 @@ export const chat = {
 
   get(requestId: string, signal?: AbortSignal): Promise<AskResponse> {
     return send<AskResponse>(`/chat/${encodeURIComponent(requestId)}`, { signal });
+  },
+};
+
+/**
+ * Operational reads.
+ *
+ * `config` carries secrets as presence booleans only (FR-042) — the client has
+ * no field that could hold a value, which is why the schema has none either.
+ * `health` reports each dependency independently so a vector outage can be read
+ * as a vector outage rather than as a generic failure.
+ */
+export const system = {
+  config(signal?: AbortSignal): Promise<ConfigResponse> {
+    return send<ConfigResponse>("/config", { signal });
+  },
+  health(signal?: AbortSignal): Promise<HealthResponse> {
+    return send<HealthResponse>("/health", { signal });
   },
 };
 

@@ -349,15 +349,15 @@ sources and configuration from a dashboard.
 **Independent Test**: Open the corpus views and confirm source, document, and configuration
 status are visible and actionable without touching a database.
 
-- [ ] T153 [P] [US7] Write the secret-exposure test in `backend/tests/contract/test_config_no_secrets.py` — assert no response from any endpoint contains a secret value, and that the `SecretPresence` schema has no value field anywhere (FR-042)
-- [ ] T154 [P] [US7] Write the corpus-browse tests in `backend/tests/integration/test_corpus_views.py` — sources show identity, product, pages indexed, last crawl time, and status; documents are browsable and filterable; a source with every document deleted remains listed with zero pages rather than disappearing (FR-030, edge case 16)
-- [ ] T155 [US7] Build the sources console in `frontend/app/sources/page.tsx` and `frontend/components/corpus/source-table.tsx` — identity, product, pages indexed, last crawl time, status, and per-source actions
-- [ ] T156 [P] [US7] Build the documents browser in `frontend/app/documents/page.tsx` and `frontend/components/corpus/document-table.tsx` — browse and filter, with each row linking to its original page
-- [ ] T157 [P] [US7] Build the document detail view in `frontend/components/corpus/document-detail.tsx` showing title, product, category, page type, language, fingerprint, crawl time, and lifecycle state
-- [ ] T158 [P] [US7] Build the unit inspector in `frontend/components/corpus/unit-inspector.tsx` showing each unit's ordinal, heading path, and token size — the direct visual check that R-009's reconstruction walk worked
-- [ ] T159 [P] [US7] Build the crawl job history view in `frontend/components/corpus/crawl-history.tsx` showing per-job pages discovered, pages processed, and error detail (FR-054)
-- [ ] T160 [US7] Build the configuration view in `frontend/app/settings/page.tsx` and `frontend/components/corpus/config-view.tsx` — operational status and the settings that affect retrieval, with secret **presence** only and no values (FR-042, US7 scenario 4)
-- [ ] T161 [US7] Build the health view in `frontend/components/corpus/health-view.tsx` — provider, vector service, and database status from `/health` (FR-061)
+- [X] T153 [P] [US7] Write the secret-exposure test in `backend/tests/contract/test_config_no_secrets.py` — assert no response from any endpoint contains a secret value, and that the `SecretPresence` schema has no value field anywhere (FR-042)
+- [X] T154 [P] [US7] Write the corpus-browse tests in `backend/tests/integration/test_corpus_views.py` — sources show identity, product, pages indexed, last crawl time, and status; documents are browsable and filterable; a source with every document deleted remains listed with zero pages rather than disappearing (FR-030, edge case 16)
+- [X] T155 [US7] Build the sources console in `frontend/app/sources/page.tsx` and `frontend/components/corpus/source-table.tsx` — identity, product, pages indexed, last crawl time, status, and per-source actions
+- [X] T156 [P] [US7] Build the documents browser in `frontend/app/documents/page.tsx` and `frontend/components/corpus/document-table.tsx` — browse and filter, with each row linking to its original page
+- [X] T157 [P] [US7] Build the document detail view in `frontend/components/corpus/document-detail.tsx` showing title, product, category, page type, language, fingerprint, crawl time, and lifecycle state
+- [X] T158 [P] [US7] Build the unit inspector in `frontend/components/corpus/unit-inspector.tsx` showing each unit's ordinal, heading path, and token size — the direct visual check that R-009's reconstruction walk worked
+- [X] T159 [P] [US7] Build the crawl job history view in `frontend/components/corpus/crawl-history.tsx` showing per-job pages discovered, pages processed, and error detail (FR-054)
+- [X] T160 [US7] Build the configuration view in `frontend/app/settings/page.tsx` and `frontend/components/corpus/config-view.tsx` — operational status and the settings that affect retrieval, with secret **presence** only and no values (FR-042, US7 scenario 4)
+- [X] T161 [US7] Build the health view in `frontend/components/corpus/health-view.tsx` — provider, vector service, and database status from `/health` (FR-061)
 - [ ] T162 [US7] Verify the US7 independent test and the empty-corpus case against `backend/tests/integration/test_corpus_views.py`
 
 **Checkpoint**: Day-two operation needs no database access.
