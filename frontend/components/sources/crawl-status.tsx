@@ -172,9 +172,9 @@ function JobReport({ job, onRetry }: { job: CrawlJob; onRetry: (() => void) | un
 
       {reasons.length > 0 ? (
         <div className="mt-4">
-          <h4 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             Why pages were skipped
-          </h4>
+          </h3>
           <ul className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm">
             {reasons.map(([reason, count]) => (
               <li key={reason}>

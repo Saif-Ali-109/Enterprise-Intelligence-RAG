@@ -34,7 +34,17 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <Providers>
           <div className="mx-auto flex min-h-screen max-w-6xl flex-col gap-8 px-4 py-8">
             <header className="grid gap-2">
-              <h1 className="text-2xl font-semibold tracking-tight">Enterprise Knowledge Intelligence</h1>
+              {/*
+                The site name is a paragraph, not a heading. Each view supplies its
+                own `h1` — "Sources", "Documents", "Evaluation", "Settings",
+                "Ask a question" — and a shell-level `h1` gave every one of those
+                pages two `h1`s, so a screen reader listing headings by level found
+                the product name and the page name as equals. The site's name is a
+                banner, and a banner is not a section of the page.
+              */}
+              <p className="text-2xl font-semibold tracking-tight">
+                Enterprise Knowledge Intelligence
+              </p>
               <p className="text-sm text-muted-foreground">
                 Answers grounded in publicly available Atlassian documentation, with the source
                 section for every claim.

@@ -18,6 +18,12 @@ import { SourceList } from "@/components/sources/source-list";
 export default function Home() {
   return (
     <div className="grid gap-8">
+      {/*
+        The page's `h1`. The shell supplies the site name as a banner, so every
+        view owns its own top-level heading and a heading list has one entry at
+        level 1 — the page a reader is actually on.
+      */}
+      <h1 className="text-2xl font-semibold tracking-tight">Ask a question</h1>
       <ChatPanel />
       <section aria-labelledby="corpus-heading" className="grid gap-4">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
