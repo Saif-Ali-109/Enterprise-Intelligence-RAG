@@ -158,6 +158,67 @@ def _is_undersized(chunk: Chunk) -> bool:
     return chunk.estimated_tokens < get_settings().chunk_min_useful_tokens
 
 
+#: A line of prose ends like this. Anything else is a label.
+_SENTENCE_END = (".", "!", "?", ":", ";", "。", "！", "？")
+
+
+def _is_navigation_block(block: ExtractedBlock) -> bool:
+    """Whether an extracted block is page furniture rather than content.
+
+    Measured 2026-10-09 on `developer.atlassian.com`'s REST API reference: 449
+    blocks from one page, 309 with no sentence-terminated line, median block six
+    words. They were embedded, indexed, retrieved and cited; a published answer
+    that "the latest released version of the Jira Cloud platform API is version 2"
+    was grounded in a breadcrumb containing the string `REST API v2`.
+
+    **Line length, not length.** Real prose reaches here with no terminator
+    constantly, because the extractor cuts paragraphs at element boundaries and a
+    paragraph can end mid-sentence. Measured on a Confluence documentation page,
+    "Spaces in Confluence are designed to suit different purposes. When you
+    create a new space," is 28 words on one line with no full stop. A rule keyed on
+    length alone drops it.
+
+    Either condition is sufficient, and both require the absence of any sentence
+    terminator, so a short *sentence* is never mistaken for a label:
+
+    - fewer than `chunk_navigation_min_words` words — a breadcrumb, or two link
+      labels;
+    - fewer than `chunk_navigation_max_words_per_line` words per line on average —
+      a table of contents, or a list of resource names.
+
+    The threshold is measured rather than chosen: across four live pages the
+    no-terminator blocks run at 1.0 words per line for the site menu, 3.0 median
+    and 4.0 for the reference index, and 5.0 for a list of constraint labels on a
+    documentation page — while prose cut mid-sentence runs at 28 or more.
+    """
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    if not settings.chunk_drop_navigation:
+        return False
+
+    lines = [line for line in block.text.splitlines() if line.strip()]
+    if not lines:
+        return True
+    if any(line.rstrip().endswith(_SENTENCE_END) for line in lines):
+        return False
+
+    words = len(block.text.split())
+    if words < settings.chunk_navigation_min_words:
+        return True
+    return (words / len(lines)) < settings.chunk_navigation_max_words_per_line
+
+
+def _rejection_reason(chunk: Chunk) -> str | None:
+    """Why this assembled unit is not indexed, or `None` when it is.
+
+    Only the size floor applies at this stage. Navigation is decided per block,
+    before assembly, because a unit that mixes one sentence of prose with a menu
+    is not separable afterwards — and separating it is the whole point.
+    """
+    return "below_usefulness_floor" if _is_undersized(chunk) else None
+
+
 def _overlap_tail(
     blocks: list[ExtractedBlock], previous: list[ExtractedBlock]
 ) -> list[ExtractedBlock]:
@@ -259,12 +320,30 @@ def chunk_units(blocks: list[ExtractedBlock]) -> ChunkResult:
     sections: list[list[ExtractedBlock]] = []
     current: list[ExtractedBlock] = []
     current_key: tuple[str, ...] | None = None
+    rejected: list[RejectedUnit] = []
 
     for block in blocks:
         if not block.text.strip():
             # An empty block is not a unit. Recording it would produce an entry
             # in the audit trail that says nothing, for content that was never
             # there.
+            continue
+        if _is_navigation_block(block):
+            # Dropped **here, per block**, rather than per assembled unit — which
+            # is where the first version of this rule sat, and where it did
+            # almost nothing. Blocks are joined into 600-1000 token units, so a
+            # unit nearly always contains one block ending in a full stop, and a
+            # unit-level test answered on `any()` then kept the whole thing,
+            # navigation included. Filtered here, the same rule removes 227 of
+            # 449 blocks from one live developer page.
+            rejected.append(
+                RejectedUnit(
+                    text=block.text,
+                    heading_path=list(block.heading_path),
+                    reason="navigation_boilerplate",
+                    estimated_tokens=estimate_tokens(block.text, block_type=block.block_type),
+                )
+            )
             continue
         key = _section_key(block)
         if key != current_key:
@@ -278,7 +357,6 @@ def chunk_units(blocks: list[ExtractedBlock]) -> ChunkResult:
         sections.append(current)
 
     chunks: list[Chunk] = []
-    rejected: list[RejectedUnit] = []
     oversized: list[Chunk] = []
 
     for section in sections:
@@ -307,18 +385,20 @@ def chunk_units(blocks: list[ExtractedBlock]) -> ChunkResult:
             oversized.append(candidate)
 
         for candidate in candidates:
-            if _is_undersized(candidate):
+            rejection = _rejection_reason(candidate)
+            if rejection is not None:
                 rejected.append(
                     RejectedUnit(
                         text=candidate.text,
                         heading_path=list(candidate.heading_path),
-                        reason="below_usefulness_floor",
+                        reason=rejection,
                         estimated_tokens=candidate.estimated_tokens,
                     )
                 )
                 _log.info(
-                    "unit rejected as below the usefulness floor",
+                    "unit rejected at ingestion",
                     extra={
+                        "reason": rejection,
                         "estimated_tokens": candidate.estimated_tokens,
                         "heading_path": candidate.heading_path,
                     },

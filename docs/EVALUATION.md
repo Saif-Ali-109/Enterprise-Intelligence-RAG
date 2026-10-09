@@ -16,16 +16,17 @@ Two rules govern everything below:
 
 ## 1. Measured results
 
-This is the honest record of a real run against a real corpus. Nothing here is illustrative.
+This is the honest record of real runs against real corpora. Nothing here is illustrative, and
+**the headline is a failure**: the absolute-zero gate does not currently hold.
 
 | | |
 |---|---|
-| **Run id** | `b6d452a3-0072-429a-b794-64b519ea06af` |
+| **Run id** | `fb88cffa-2aeb-48b3-994c-ddab89c63ff5` |
 | **Dataset** | version `1.2.0`, fingerprint `68d76c26e6fc063c…` |
-| **Started → finished** | 2026-10-09T17:24:37Z → 2026-10-09T17:26:47Z (2 min 10 s) |
-| **Corpus** | 19 documents, 149 units — one registered source, `support.atlassian.com`, capped at 25 pages |
+| **Started → finished** | 2026-10-09T18:32:27Z → 2026-10-09T18:39:18Z (6 min 51 s) |
+| **Corpus** | 157 documents, 1100 units — 18 registered sources across four products |
 | **Provider** | `openai/gpt-oss-120b` via Groq; rerank `bge-reranker-v2-m3` |
-| **Outcome** | **`fail`** — 4 gates outside their thresholds |
+| **Outcome** | **`fail`** — 7 gates outside their thresholds, including the absolute zero |
 
 ### Metrics as measured
 
@@ -35,45 +36,83 @@ This is the honest record of a real run against a real corpus. Nothing here is i
 | `precision_at_5` | **0.000** | ≥ 0.60 | **fail** |
 | `mrr` | **0.000** | ≥ 0.75 | **fail** |
 | `cross_product_domain_coverage` | 1.000 | ≥ 0.80 | pass |
-| `citation_validity` | `null` | ≥ 0.98 | not applicable |
-| `claim_coverage` | `null` | ≥ 0.85 | not applicable |
-| `faithfulness` | `null` | ≥ 0.90 | not applicable |
+| `citation_validity` | 1.000 | ≥ 0.98 | pass |
+| `claim_coverage` | **0.000** | ≥ 0.85 | **fail** |
+| `faithfulness` | **0.233** | ≥ 0.90 | **fail** |
 | `unsupported_refusal_rate` | 1.000 | = 1.00 | pass |
-| `fabricated_fact_count` | **0** | = 0 | pass |
+| `fabricated_fact_count` | **3** | = 0 | **fail** |
 | `invalid_citation_count` | **0** | = 0 | pass |
-| `p50_latency_ms` | 3311 | — | reported |
-| `p95_latency_ms` | **8578** | ≤ 8000 | **fail** |
-| `error_rate` | 0.000 | — | reported |
+| `p50_latency_ms` | 8093 | — | reported |
+| `p95_latency_ms` | **32 500** | ≤ 8000 | **fail** |
+| `error_rate` | 0.156 | — | reported |
 
-**All 32 questions refused, and every one of them refused for a stated reason.** That is the
-quality gate working: this corpus is a scrape of a documentation *landing page*, so it cannot
-support questions about JQL syntax or OAuth scopes, and the system declines rather than improvising.
-The three `null` metrics are `null` because no question produced an answer to measure them against —
-recording `0.0` there would present a correct refusal as a failed measurement.
+Six questions answered, 21 refused, 5 raised. Every one of the 21 refusals carried a stated
+reason.
 
-### What this run does and does not tell you
+### The absolute zero is the finding that matters
 
-**The zero retrieval scores are about the corpus, not only about retrieval.** `recall_at_5 = 0` means
-the top 5 candidates for each question never covered the expected product/category/heading-path
-target — because 19 landing pages do not contain the topic-specific sections the gold set expects. The
-metric is measuring corpus coverage at least as much as pipeline quality, and reporting it as 0.000
-rather than hiding it is the correct behaviour.
+`fabricated_fact_count = 3` is not a rounding artefact and not a metric that disagrees with the
+runtime. It is three genuine, uncited, actionable claims:
 
-**What the run does establish, on a corpus of this size:**
+> "To set the restrictions, open the Share dialog on the page, choose 'Restrict' and select
+> whether you want to limit 'Can view' or 'Can edit' to specific users or groups."
 
-- the refusal path works, including for all four deliberately-unsupported questions;
-- **zero fabricated facts** and **zero invalid citations** — the absolute-zero gates hold;
-- no question errored (`error_rate = 0.000`);
-- p50 latency of 3.3 s is well inside the 8 s target; p95 of 8.6 s is not, and generation against a
-  provider is the cause.
+That sentence carries no citation, in an answer that otherwise cites correctly. It is the most
+useful sentence in the answer — a procedure a reader would follow — and nothing in the system
+stopped it reaching a client.
 
-**To get retrieval numbers that mean something, index the documentation the gold set expects** —
-several hundred topic-specific pages rather than a landing page — and re-run. The metric does not
-change; the corpus does.
+**The prompt already promises this cannot happen.** It instructs the model to mark every claim and
+states that an answer whose sentences carry no markers is refused. The generation step verifies
+that the answer as a whole is `SUPPORTED` by the evidence, which it was; it never checks that each
+claim is marked. So the promise lives in the prompt, the enforcement does not exist, and the
+evaluation found the gap. Fixing it is a product decision with a measured cost, recorded in
+[tasks.md](../specs/001-enterprise-knowledge-rag/tasks.md) and not resolved here: an earlier live
+measurement found the model produces inline markers in 3 of 6 answers, so enforcing the promise
+strictly would refuse roughly half of all answerable questions over a formatting habit, while
+their citations resolve perfectly well.
 
-A second, earlier run on the same corpus (`dfa3a1fd-8a5-45a0-b546-36f52ebbf6d1`, 2026-10-07) produced
-`p95_latency_ms = 11308` and one answered question with `fabricated_fact_count = 0`. Both runs are
-in the database; both failed their gates.
+### Retrieval: zero, and the dataset has drifted
+
+`recall_at_5 = 0.000` after 157 documents and 1100 units — worse than the 0.036 the 19-document
+corpus produced, and that is not a paradox. Recall is graded by whether a retrieved unit covers the
+expected **product, category and heading path**, and Atlassian has renamed the pages the gold set
+was written against. Measured against the live corpus: of the 25 expected heading paths, **6 are
+present and 19 no longer exist under that wording** — "service space agents" is now "service
+project agents", "Delete, restore, or purge a content item" is now "…a page". The gold set is
+version 1.2.0 and its labels are stale; the metric is faithfully reporting that the expected
+targets are not in the corpus.
+
+That is a dataset problem, not a retrieval one, and it is **not fixed here** — editing the gold
+set's expected labels to match today's corpus would be moving the goalposts to make a number look
+better. It is stated so the number can be read correctly.
+
+### What this run does establish
+
+- **all four deliberately-unsupported questions were refused** (`unsupported_refusal_rate = 1.000`),
+  including the version question that a previous corpus answered from a page breadcrumb;
+- **zero invalid citations** — every citation the model issued resolved to evidence that was
+  actually served (`citation_validity = 1.000`);
+- cross-product coverage 1.000: every cross-product question consulted at least two products.
+
+### What is wrong with the system, not the corpus
+
+**`p95_latency_ms = 32 500`** against an 8000 ms target, with p50 at 8093 ms. Two causes, both
+real: the corpus is now 1100 units rather than 149, and 5 of 32 questions raised rather than
+answered because the provider's quota was exhausted mid-run. A rate-limited provider is an
+environment fact, not a defect, and it is recorded as `error_rate` rather than averaged away.
+
+### Earlier runs, for comparison
+
+| Run | Corpus | Outcome | Notable |
+|---|---|---|---|
+| `dfa3a1fd` (2026-10-07) | 19 docs / 149 units | fail | All questions refused; no generation ran, so the absolute zeros were untested |
+| `b6d452a3` (2026-10-09) | 19 docs / 149 units | fail | Same, inside the container image |
+| `68350c4a` (2026-10-09) | 132 docs / 841 units | fail | **Navigation was still in the corpus**: one published answer asserted an API version, grounded in a breadcrumb containing the string `REST API v2`. Ten questions errored on provider rate limits. |
+| `fb88cffa` (2026-10-09) | 157 docs / 1100 units | fail | After the navigation filter and the fingerprint fix. That version question now **refuses**. Three uncited claims remain — the finding above. |
+
+The progression matters more than any single row: the absolute zeros looked green for two runs
+simply because nothing was answered, and only became measurable once the corpus was large enough
+for the pipeline to actually generate.
 
 ---
 
@@ -214,7 +253,7 @@ returns all three:
 ```json
 "gate_failures": [
   {"gate": "recall_at_5", "target": 0.8,  "actual": 0.0},
-  {"gate": "p95_latency_ms", "target": 8000.0, "actual": 8578.0}
+  {"gate": "p95_latency_ms", "target": 8000.0, "actual": 32500.0}
 ]
 ```
 
@@ -245,6 +284,8 @@ cannot reproduce is a number you should not report.
 | `tests/unit/test_gate_thresholds.py` | A raised threshold names its failing gate. Latency is the only at-most gate. The two zero gates fail with no configuration to tune them. A metric missing from a run is `null`, not a synthetic zero. |
 | `tests/unit/test_topic_grading.py` | A unit covers a target by product, category, and heading path — never by URL. Order-sensitive, not contiguous. Unsupported questions are `None`, not `0.0`. |
 | `tests/integration/test_metrics_respond.py` | **The tripwire.** A deliberately degraded pipeline moves five measured metrics; if any does not move, the test fails. A metric that cannot tell an answering pipeline from a refusing one is decorative. |
+| `tests/unit/test_navigation_filter.py` | The blocks that made the corpus unusable are not indexed, and prose the extractor cut mid-sentence still is |
+| `tests/unit/test_fingerprint_tracks_policy.py` | Changing how units are built invalidates the corpus that was built the old way |
 | `tests/integration/test_eval_empty_state.py` | With no run: totals are `0`, metrics are `null`, and no endpoint renders a quality number. |
 | `tests/integration/test_eval_run_bookkeeping.py` | Each question gets its own request id and its own audit row, and the run reaches a terminal status with real metrics. |
 

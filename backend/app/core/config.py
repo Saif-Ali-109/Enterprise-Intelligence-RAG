@@ -207,6 +207,34 @@ class Settings(BaseSettings):
     chunk_overlap_tokens: int = 100
     chunk_min_useful_tokens: int = 50
 
+    # -- ingestion: navigation and boilerplate ------------------------------
+    # **Measured 2026-10-09, on a live page.** `developer.atlassian.com`'s REST
+    # API reference yields 449 blocks from one page, of which 309 (69%) carry no
+    # sentence-terminated line at all and the median block is six words: the
+    # header, the breadcrumb, the reference table of contents, and 3,000 words of
+    # resource names. Those units were embedded, indexed, retrieved and cited —
+    # one of them, a breadcrumb reading "Cloud Jira Cloud platform / Reference /
+    # REST API v2", was the evidence for a published answer that "the latest
+    # released version of the Jira Cloud platform API is version 2".
+    #
+    # A block is treated as navigation when it carries no sentence terminator and
+    # is either very short or made almost entirely of very short lines. Line
+    # length is the discriminator rather than total length, because real prose is
+    # routinely cut mid-sentence by the extractor and therefore has no terminator
+    # either: on a Confluence documentation page, "Spaces in Confluence are
+    # designed to suit different purposes. When you create a new space," is 28
+    # words over one line, and no rule keyed on length alone may drop it.
+    chunk_drop_navigation: bool = True
+    chunk_navigation_min_words: int = 12
+    # 6.0, measured rather than chosen. Across four live pages the
+    # no-terminator blocks are: 1.0 words per line for the site menu, 3.0 median
+    # and 4.0 for the reference table of contents, 5.0 for a list of constraint
+    # labels on a documentation page — and 28 words per line or more for prose
+    # that was cut mid-sentence. 6.0 separates the two populations with the whole
+    # gap between them unused, which is what a threshold should look like when it
+    # is measured.
+    chunk_navigation_max_words_per_line: float = 6.0
+
     # **The load-bearing size bound, measured 2026-09-30.** T027 wrote to a live
     # index and read this off a rejection:
     #   `Metadata size is 76009 bytes, which exceeds the limit of 40960 bytes

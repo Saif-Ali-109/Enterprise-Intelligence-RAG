@@ -97,10 +97,16 @@ Five views, in the order a reviewer should meet them.
 
 ### Measured results
 
-The current evaluation run **fails its gate** — retrieval recall@5 of 0.000 against a 0.80 target,
-and p95 latency of 8578 ms against an 8000 ms target — and is reported that way. Zero fabricated
-facts, zero invalid citations, and all four deliberately-unsupported questions refused. The numbers,
-the corpus they were measured on, and how to read them are in
+The current evaluation run **fails its gate**, and is reported that way. Against 157 documents and
+1100 units: retrieval recall@5 of 0.000 against a 0.80 target, p95 latency of 32 500 ms against
+8000 ms, and **three uncited claims — the absolute-zero gate, which does not currently hold.**
+
+Also passing: all four deliberately-unsupported questions refused, citation validity 1.000,
+cross-product coverage 1.000, zero invalid citations.
+
+Every one of these was found by running the thing. The 19-document corpus that came before it
+looked healthier only because nothing was answered; the numbers, the corpus they were measured on,
+the three uncited claims quoted in full, and how to read a failing gate are in
 [docs/EVALUATION.md](docs/EVALUATION.md).
 
 ---
