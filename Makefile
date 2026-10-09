@@ -57,6 +57,14 @@ validate-data: ## Validate both committed data files against their JSON Schemas
 hygiene: ## Fail on secrets, third-party page content, or machine-specific paths
 	@scripts/check_repo_hygiene.sh
 
+.PHONY: api-docs
+api-docs: ## Regenerate docs/API.md from contracts/openapi.yaml
+	@$(PY) scripts/generate_api_docs.py
+
+.PHONY: api-docs-check
+api-docs-check: ## Fail if docs/API.md disagrees with the contract
+	@$(PY) scripts/generate_api_docs.py --check
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -125,7 +133,7 @@ revision: ## Generate a migration: make revision m="add column x"
 # Housekeeping
 # ---------------------------------------------------------------------------
 .PHONY: check
-check: validate-data hygiene lint typecheck test ## Every gate that needs no external service
+check: validate-data hygiene api-docs-check lint typecheck test ## Every gate that needs no external service
 
 .PHONY: clean
 clean: ## Remove caches and build output
