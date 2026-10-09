@@ -45,7 +45,7 @@ export function CrawlHistory({ sourceId }: { sourceId?: string } = {}) {
   }
   if (query.isError) {
     return (
-      <p role="alert" className="text-sm text-red-700">
+      <p role="alert" className="text-sm text-danger-text">
         {describeError(query.error)}
       </p>
     );
@@ -85,9 +85,9 @@ export function CrawlHistory({ sourceId }: { sourceId?: string } = {}) {
               <TableCell
                 className={
                   job.status === "failed" || job.status === "cancelled"
-                    ? "text-red-700"
+                    ? "text-danger-text"
                     : job.status === "completed_with_errors"
-                      ? "text-amber-800"
+                      ? "text-warning-text"
                       : undefined
                 }
               >
@@ -100,7 +100,7 @@ export function CrawlHistory({ sourceId }: { sourceId?: string } = {}) {
               <TableCell className="font-mono">{job.counters.failed}</TableCell>
               <TableCell className="text-xs">
                 {job.error_message !== null ? (
-                  <span className="block text-red-700">{job.error_message}</span>
+                  <span className="block text-danger-text">{job.error_message}</span>
                 ) : null}
                 {job.skipped_reasons === null ? null : (
                   <span className="block text-muted-foreground">

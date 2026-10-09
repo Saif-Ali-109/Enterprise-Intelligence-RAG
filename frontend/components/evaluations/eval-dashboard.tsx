@@ -119,10 +119,26 @@ function RunDetail({ run }: { run: EvaluationRun }) {
           Run
         </h3>
         <dl className="grid gap-1 text-xs text-muted-foreground">
-          <div>dataset: {run.dataset_version}</div>
-          <div>fingerprint: <span className="font-mono">{run.dataset_fingerprint.slice(0, 16)}…</span></div>
-          <div>questions: {run.question_count}</div>
-          <div>status: {run.status}</div>
+          {/* dt/dd pairs rather than bare divs: axe failed this list with
+              `definition-list` because a <div> holding plain text is not a
+              description term. The run's provenance is a set of labelled
+              values, which is what a definition list is for. */}
+          <div className="flex gap-1">
+            <dt className="font-medium">dataset</dt>
+            <dd>{run.dataset_version}</dd>
+          </div>
+          <div className="flex gap-1">
+            <dt className="font-medium">fingerprint</dt>
+            <dd className="font-mono">{run.dataset_fingerprint.slice(0, 16)}…</dd>
+          </div>
+          <div className="flex gap-1">
+            <dt className="font-medium">questions</dt>
+            <dd>{run.question_count}</dd>
+          </div>
+          <div className="flex gap-1">
+            <dt className="font-medium">status</dt>
+            <dd>{run.status}</dd>
+          </div>
         </dl>
       </section>
 
@@ -142,7 +158,7 @@ function RunDetail({ run }: { run: EvaluationRun }) {
                 <span className="text-muted-foreground">
                   latency: {r.latency_ms === null ? "not measured" : `${r.latency_ms} ms`}
                 </span>
-                {r.error !== null ? <span className="text-red-700">{r.error}</span> : null}
+                {r.error !== null ? <span className="text-danger-text">{r.error}</span> : null}
               </li>
             ))}
           </ul>
@@ -159,7 +175,7 @@ export function EvalDashboard() {
   const detail = useEvaluationRun(latest?.id ?? null);
 
   if (runs.isError) {
-    return <p className="text-sm text-red-700">The evaluation runs could not be loaded.</p>;
+    return <p className="text-sm text-danger-text">The evaluation runs could not be loaded.</p>;
   }
 
   if (runs.isPending) {
@@ -183,7 +199,7 @@ export function EvalDashboard() {
       </div>
 
       {start.isError ? (
-        <p role="alert" className="text-sm text-red-700">
+        <p role="alert" className="text-sm text-danger-text">
           The run could not be started: {start.error.message}
         </p>
       ) : null}

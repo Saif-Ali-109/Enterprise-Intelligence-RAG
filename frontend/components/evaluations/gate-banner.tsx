@@ -31,7 +31,7 @@ export function GateBanner({
       <div
         role="status"
         aria-label="Quality gate"
-        className="rounded-md border border-green-700 bg-green-50 px-4 py-3 text-sm"
+        className="rounded-md border border-success-border bg-success-surface px-4 py-3 text-sm"
       >
         <span className="font-semibold">Gate: pass.</span>{" "}
         <span className="text-muted-foreground">
@@ -45,7 +45,7 @@ export function GateBanner({
     <div
       role="alert"
       aria-label="Quality gate"
-      className="rounded-md border-2 border-red-700 bg-red-50 px-4 py-3 text-sm"
+      className="rounded-md border-2 border-danger-border bg-danger-surface px-4 py-3 text-sm"
     >
       <p className="font-semibold">
         Gate: fail. {failures.length} {failures.length === 1 ? "gate" : "gates"} outside the

@@ -6,11 +6,25 @@
  * Tailwind v4 has no ready-made contrast tokens, so contrast is an EXPLICIT
  * choice here rather than an inherited default. R-012 records that a contrast
  * failure has to be measured (SC-022) rather than assumed from the palette, and
- * the values below are the ones that pass AA against their own backgrounds:
- *   --muted-foreground on --background  5.31:1
- *   --border on --background             1.62:1  (non-text, 3:1 not required)
- *   --accent-foreground on --accent     7.94:1
- * Dark mode is declared, not defaulted, for the same reason.
+ * `e2e/accessibility.spec.ts` runs axe against every view in both colour
+ * schemes — so these values are checked, not asserted.
+ *
+ * **Why the status colours are tokens and not `text-green-800`.** They used to be
+ * Tailwind's stock palette, which is a fixed pair of light-mode colours: dark
+ * green on white, near-white red surfaces. That is unreadable on this
+ * application's dark background, and axe found it — `text-green-800` on the
+ * settings view and the gate banner's text on its own `bg-red-50` both failed at
+ * 1.6:1 and 1.1:1. Semantic tokens are declared per scheme below, so a status
+ * colour is chosen against the background it will actually sit on.
+ *
+ * **Why the dark scheme is a plain `:root` override and not `@theme`.** `@theme`
+ * emits onto `:root`, unconditionally. Wrapping `@theme` in
+ * `@media (prefers-color-scheme: dark)` — which this file did — therefore did
+ * not scope anything: the dark block was emitted as a second unconditional
+ * `:root` and, coming last, won. Every visitor got the dark palette regardless
+ * of their system setting, while stock light-mode component colours were drawn
+ * on top of it. Utilities compile to `var(--color-*)`, so overriding the
+ * variables under a media query is what actually scopes the scheme.
  */
 @theme {
   --color-background: oklch(1 0 0);
@@ -24,11 +38,28 @@
   --color-destructive-foreground: oklch(0.985 0 0);
   --color-success: oklch(0.596 0.145 163.225);
 
+  /* Status colours, used as text and as a surface. Each is chosen against the
+     background it sits on rather than inherited from a palette. */
+  --color-success-text: oklch(0.436 0.121 155.5);
+  --color-success-surface: oklch(0.962 0.044 156.5);
+  --color-success-border: oklch(0.648 0.145 155.5);
+  --color-danger-text: oklch(0.505 0.196 27.325);
+  --color-danger-surface: oklch(0.971 0.013 17.38);
+  --color-danger-border: oklch(0.577 0.245 27.325);
+  --color-warning-text: oklch(0.47 0.117 57.5);
+  --color-warning-surface: oklch(0.973 0.071 103.1);
+  --color-warning-border: oklch(0.666 0.161 58.3);
+
   --radius-card: 0.5rem;
 }
 
+/*
+ * The dark scheme. Plain custom-property declarations on `:root`, inside the
+ * media query — see the note above for why `@theme` cannot be used here.
+ */
 @media (prefers-color-scheme: dark) {
-  @theme {
+  :root,
+  :host {
     --color-background: oklch(0.145 0 0);
     --color-foreground: oklch(0.985 0 0);
     --color-muted: oklch(0.269 0 0);
@@ -39,6 +70,17 @@
     --color-destructive: oklch(0.704 0.191 22.216);
     --color-destructive-foreground: oklch(0.985 0 0);
     --color-success: oklch(0.696 0.17 162.48);
+
+    /* Re-chosen against a near-black background, not lightened copies. */
+    --color-success-text: oklch(0.79 0.16 158.5);
+    --color-success-surface: oklch(0.28 0.055 158.5);
+    --color-success-border: oklch(0.55 0.13 158.5);
+    --color-danger-text: oklch(0.77 0.15 22.2);
+    --color-danger-surface: oklch(0.28 0.075 22.2);
+    --color-danger-border: oklch(0.58 0.17 22.2);
+    --color-warning-text: oklch(0.82 0.13 79.5);
+    --color-warning-surface: oklch(0.3 0.06 79.5);
+    --color-warning-border: oklch(0.6 0.12 79.5);
   }
 }
 

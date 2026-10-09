@@ -112,7 +112,7 @@ export function DocumentTable() {
 
       {query.isPending ? <p className="text-sm text-muted-foreground">Loading documents…</p> : null}
       {query.isError ? (
-        <p role="alert" className="text-sm text-red-700">
+        <p role="alert" className="text-sm text-danger-text">
           {describeError(query.error)}
         </p>
       ) : null}
@@ -161,7 +161,7 @@ export function DocumentTable() {
                     <TableCell>{item.product ?? "—"}</TableCell>
                     <TableCell>{item.category ?? "—"}</TableCell>
                     <TableCell
-                      className={item.state === "deleted" ? "text-red-700" : undefined}
+                      className={item.state === "deleted" ? "text-danger-text" : undefined}
                     >
                       {item.state}
                       {item.state_detail !== null ? (

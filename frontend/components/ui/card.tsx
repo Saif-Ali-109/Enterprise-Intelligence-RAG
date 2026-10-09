@@ -54,14 +54,19 @@ export function CardContent({ className, ...props }: HTMLAttributes<HTMLDivEleme
  * Colour plus text, never colour alone (FR-059): every state here renders its
  * name, so the badge is redundant for a reader who cannot distinguish the hues.
  * `tone` carries meaning; `children` carries the word.
+ *
+ * **The text colours are the `*-text` tokens, not `text-success`/`text-destructive`.**
+ * The latter were chosen as graphic colours and measure 3.65:1 on white — fine for
+ * a fill, unreadable as 12px text. axe found this badge on the ask view in the
+ * light scheme; the badge is small text, so it needs the 4.5:1 tokens.
  */
 export type BadgeTone = "neutral" | "success" | "warning" | "danger" | "info";
 
 const badgeTones: Record<BadgeTone, string> = {
   neutral: "border text-muted-foreground",
-  success: "border-success/40 text-success",
-  warning: "border-destructive/40 text-destructive",
-  danger: "border-destructive bg-destructive/10 text-destructive",
+  success: "border-success-border/50 text-success-text",
+  warning: "border-warning-border/50 text-warning-text",
+  danger: "border-danger-border bg-danger-surface text-danger-text",
   info: "border text-foreground",
 };
 

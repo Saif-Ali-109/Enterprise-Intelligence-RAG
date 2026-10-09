@@ -34,7 +34,7 @@ export function UnitInspector({ documentId }: { documentId: string }) {
     return <p className="text-sm text-muted-foreground">Loading units…</p>;
   }
   if (query.isError) {
-    return <p role="alert" className="text-sm text-red-700">{describeError(query.error)}</p>;
+    return <p role="alert" className="text-sm text-danger-text">{describeError(query.error)}</p>;
   }
 
   const { items, total } = query.data;
