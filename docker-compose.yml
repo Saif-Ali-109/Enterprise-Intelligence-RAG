@@ -45,8 +45,11 @@ services:
 
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      # The repository root, not ./backend: the image also carries the gold set
+      # and its JSON Schema (see backend/Dockerfile). Building from the backend
+      # directory produced an image in which every evaluation endpoint 500'd.
+      context: .
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
     depends_on:
       postgres:
@@ -60,6 +63,8 @@ services:
       PINECONE_API_KEY: ${PINECONE_API_KEY:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      # The gold set and its schema are copied into the image; this says where.
+      PROJECT_ROOT: /app
     ports:
       - "127.0.0.1:8000:8000"
     healthcheck:

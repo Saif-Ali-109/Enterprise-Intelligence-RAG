@@ -25,9 +25,8 @@ import jsonschema  # type: ignore[import-untyped]
 from app.schemas.evaluations import EvaluationDataset, EvaluationDatasetQuestion
 
 # The dataset lives at the repository root, three parents above this file. The
-# runner's cwd cannot be relied on (uvicorn may start from anywhere), so the
-# default is anchored to the package and overridable by setting.
-DEFAULT_DATASET_PATH = Path(__file__).resolve().parents[3] / "evaluation" / "golden_questions.json"
+# runner's cwd cannot be relied on (uvicorn may start from anywhere), so both
+# paths come from configuration resolved against `project_root`.
 
 
 class DatasetInvalid(Exception):
@@ -38,15 +37,40 @@ class DatasetInvalid(Exception):
         self.reason = reason
 
 
+def _resolve(relative: Path) -> Path:
+    """Absolute path for a configured data file.
+
+    An absolute setting is honoured as given: an operator who mounts the gold
+    set somewhere else should not have to lay out a repository to match.
+    """
+    from app.core.config import get_settings
+
+    candidate = relative if relative.is_absolute() else get_settings().project_root / relative
+    return candidate
+
+
+def dataset_file() -> Path:
+    from app.core.config import get_settings
+
+    return _resolve(get_settings().eval_dataset_path)
+
+
+def schema_file() -> Path:
+    from app.core.config import get_settings
+
+    return _resolve(get_settings().eval_dataset_schema_path)
+
+
 def _schema() -> dict[str, Any]:
-    path = (
-        Path(__file__).resolve().parents[3]
-        / "specs"
-        / "001-enterprise-knowledge-rag"
-        / "contracts"
-        / "evaluation-dataset.schema.json"
-    )
-    result: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    path = schema_file()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise DatasetInvalid(f"the dataset schema does not exist: {path}") from exc
+    try:
+        result: dict[str, Any] = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise DatasetInvalid(f"the dataset schema is not JSON: {exc}") from exc
     return result
 
 
@@ -58,7 +82,7 @@ def load_dataset(path: Path | str | None = None) -> tuple[EvaluationDataset, dic
     join key to `evaluation_results`, and a duplicate would make a per-question
     audit row ambiguous.
     """
-    resolved = Path(path) if path is not None else DEFAULT_DATASET_PATH
+    resolved = Path(path) if path is not None else dataset_file()
     try:
         raw = json.loads(resolved.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:

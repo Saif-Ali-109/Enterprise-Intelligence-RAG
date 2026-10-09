@@ -23,6 +23,7 @@ from __future__ import annotations
 import functools
 import json
 from enum import StrEnum
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -293,6 +294,26 @@ class Settings(BaseSettings):
     rate_limit_ask_per_minute: int = 20
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     query_log_retention_days: int = 30
+
+    # -- evaluation data files ---------------------------------------------
+    # Both are resolved against `project_root`. They were previously computed
+    # from `__file__`, which locates them correctly in a source checkout and
+    # nowhere else: the container image has no repository root above /app, so a
+    # run started there resolved the dataset to `/evaluation/golden_questions.json`
+    # and every evaluation endpoint returned 500 (measured, after the image was
+    # actually built). Configuration rather than arithmetic, because the layout
+    # that holds them is a packaging decision.
+    project_root: Path = Field(
+        default_factory=lambda: Path(__file__).resolve().parents[3],
+        description=(
+            "Directory the evaluation data files are resolved against. In a checkout this "
+            "is the repository root; in the image it is /app."
+        ),
+    )
+    eval_dataset_path: Path = Path("evaluation/golden_questions.json")
+    eval_dataset_schema_path: Path = Path(
+        "specs/001-enterprise-knowledge-rag/contracts/evaluation-dataset.schema.json"
+    )
 
     # -- evaluation gates (FR-065) -----------------------------------------
     # Configuration, not judgement. A run records the thresholds it was judged

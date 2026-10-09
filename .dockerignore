@@ -25,9 +25,14 @@ service-account*.json
 .gitignore
 .github
 
-# --- documentation and specs: not needed to run the image ---------------------
-# The image serves the API. It does not need the specification that produced it.
-specs/
+# --- documentation and specs ---------------------------------------------------
+# The image serves the API, so it does not carry the specification prose. The
+# exception is the gold set's JSON Schema: the evaluation runner validates the
+# dataset against it at run time, so the schema is a runtime dependency of the
+# evaluation endpoints, not documentation.
+specs/**
+!specs/001-enterprise-knowledge-rag/contracts/
+!specs/001-enterprise-knowledge-rag/contracts/evaluation-dataset.schema.json
 docs/
 *.md
 !README.md
@@ -49,7 +54,13 @@ venv/
 
 # --- data: the corpus is fetched at run time, never shipped (FR-032) ------------
 data/
-evaluation/
+# `evaluation/` is excluded for everything EXCEPT the curated gold set. The
+# exclusion exists so fetched material and local run exports never enter a
+# build; `golden_questions.json` is hand-authored, committed, fingerprinted by
+# every evaluation run, and must be in the image. A blanket `evaluation/` rule
+# is what made every evaluation endpoint 500 inside the container.
+evaluation/*
+!evaluation/golden_questions.json
 crawl-cache/
 .raw/
 pages/
