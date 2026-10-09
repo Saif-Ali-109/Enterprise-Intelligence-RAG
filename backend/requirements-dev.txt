@@ -5,9 +5,10 @@ pytest==9.0.1
 pytest-asyncio==1.4.0
 pytest-cov==7.0.0
 
-# Dataset and contract validation. validate_datasets.py refuses to run without it,
-# and the contract suite validates responses against contracts/openapi.yaml.
-jsonschema==4.26.0
+# Dataset and contract validation. validate_datasets.py refuses to run without
+# jsonschema, and so does the contract suite — it is inherited from
+# requirements.txt, because application code validates the gold set with it too
+# (see the note there).
 PyYAML==6.0.3
 openapi-spec-validator==0.9.0
 
