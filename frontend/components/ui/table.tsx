@@ -35,6 +35,10 @@ export function TableBody({ className, ...props }: HTMLAttributes<HTMLTableSecti
   return <tbody className={cn("", className)} {...props} />;
 }
 
+export function TableHeader({ className, ...props }: HTMLAttributes<HTMLTableSectionElement>) {
+  return <thead className={cn("", className)} {...props} />;
+}
+
 export function TableRow({ className, ...props }: HTMLAttributes<HTMLTableRowElement>) {
   return <tr className={cn("border-b last:border-b-0", className)} {...props} />;
 }

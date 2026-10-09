@@ -17,6 +17,13 @@ signal that the audit trail has a hole in it — loud, and not on the user's pat
 question in it cannot answer "was that a refusal because nothing was indexed, or
 because the retrieval found nothing?" — the counts and the filters can (FR-048).
 
+**The evidence behind an answer is stored with it.** One `citations` row per
+validated citation, in the same transaction as its `query_logs` row. A record of
+an answer that names three sources but cannot say which three is a record of a
+claim, not of a decision, and the per-question absolute-zero gates
+(`fabricated_fact_count`, `invalid_citation_count`) are only auditable from these
+rows.
+
 **The trace is stored only when inspection was requested.** `pipeline_trace` is
 null otherwise, because a trace is per-request operator-facing detail (FR-033)
 and a permanent copy of it for every question is a data-retention decision
@@ -34,7 +41,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.db.models import QueryLog
+from app.db.models import Citation, QueryLog
 
 _log = get_logger("chat.audit")
 
@@ -64,6 +71,7 @@ async def record_query(
     rerank_model: str | None = None,
     pipeline_trace: dict[str, Any] | None = None,
     error_code: str | None = None,
+    citations: list[dict[str, Any]] | None = None,
 ) -> None:
     """Write one `query_logs` row. Never raises.
 
@@ -97,6 +105,47 @@ async def record_query(
             error_code=error_code,
         )
         session.add(row)
+        # The evidence behind an answer, as the response's own validated
+        # citations. `citations` is not decoration: it is the only durable
+        # record of *which* passages were served, and SC-008/SC-009 are checked
+        # by counting these rows. Nothing used to write them — the table, the
+        # model, and the foreign key all existed, and the first live evaluation
+        # run found zero rows for a fully cited answer.
+        if outcome == "answered":
+            for citation in citations or []:
+                # Each citation in its own savepoint. A malformed citation must
+                # not be able to take the audit row down with it: the row is the
+                # record of the request, the citation is evidence attached to it.
+                # Losing the evidence is a gap; losing the record is a hole.
+                try:
+                    async with session.begin_nested():
+                        session.add(
+                            Citation(
+                                query_log_id=row.id,
+                                rank=citation["rank"],
+                                document_id=uuid.UUID(str(citation["document_id"])),
+                                unit_id=uuid.UUID(str(citation["unit_id"])),
+                                source_url=citation["source_url"],
+                                title=citation.get("title"),
+                                product=citation.get("product"),
+                                category=citation.get("category"),
+                                heading_path=list(citation.get("heading_path") or []),
+                                quote=citation.get("quote") or "",
+                                retrieval_score=citation.get("retrieval_score"),
+                                rerank_score=citation.get("rerank_score"),
+                                validation_state=citation.get("validation_state", "valid"),
+                                validation_note=citation.get("validation_note"),
+                            )
+                        )
+                except Exception as exc:  # noqa: BLE001 - evidence must not erase the record
+                    _log.error(
+                        "a citation could not be recorded; the audit row survives without it",
+                        extra={
+                            "request_id": request_id,
+                            "rank": citation.get("rank"),
+                            "error": str(exc)[:200],
+                        },
+                    )
         await session.commit()
     except Exception as exc:  # noqa: BLE001 - the request must not fail because audit did
         _log.error(

@@ -24,9 +24,14 @@ export default function Home() {
           <h2 id="corpus-heading" className="text-lg font-semibold">
             Indexed corpus
           </h2>
-          <Link href="/sources" className="text-sm underline underline-offset-4 hover:no-underline">
-            Manage sources
-          </Link>
+          <nav className="flex gap-4 text-sm">
+            <Link href="/sources" className="underline underline-offset-4 hover:no-underline">
+              Manage sources
+            </Link>
+            <Link href="/evaluations" className="underline underline-offset-4 hover:no-underline">
+              Evaluation
+            </Link>
+          </nav>
         </div>
         <p className="text-sm text-muted-foreground">
           Answers come only from the pages registered here. Nothing else is searched.

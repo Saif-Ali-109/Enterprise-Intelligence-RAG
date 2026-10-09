@@ -237,6 +237,7 @@ async def run_chat(
         model=get_settings().groq_model,
         rerank_model=get_settings().pinecone_rerank_model,
         pipeline_trace=payload.get("trace"),
+        citations=payload.get("citations") or [],
     )
     return result
 
@@ -421,10 +422,24 @@ async def _answer(
         if inspect:
             trace_data.update(
                 {
-                    "retrieval": {"queries": queries_executed, "widened": widened, "candidates": []},
-                    "reranking": {"model": settings.pinecone_rerank_model, "submitted": len(all_candidates), "candidates": []},
+                    "retrieval": {
+                        "queries": queries_executed,
+                        "widened": widened,
+                        "candidates": [],
+                    },
+                    "reranking": {
+                        "model": settings.pinecone_rerank_model,
+                        "submitted": len(all_candidates),
+                        "candidates": [],
+                    },
                     "generation": {"attempts": 0, "verification": None},
-                    "citations": {"valid": 0, "stripped": 0, "repaired": 0, "rejected_identifiers": [], "granularity": "none"},
+                    "citations": {
+                        "valid": 0,
+                        "stripped": 0,
+                        "repaired": 0,
+                        "rejected_identifiers": [],
+                        "granularity": "none",
+                    },
                 }
             )
         return _refused(
@@ -594,8 +609,16 @@ async def _answer(
         if inspect:
             trace_data.update(
                 {
-                    "retrieval": {"queries": queries_executed, "widened": widened, "candidates": []},
-                    "reranking": {"model": settings.pinecone_rerank_model, "submitted": len(all_candidates), "candidates": []},
+                    "retrieval": {
+                        "queries": queries_executed,
+                        "widened": widened,
+                        "candidates": [],
+                    },
+                    "reranking": {
+                        "model": settings.pinecone_rerank_model,
+                        "submitted": len(all_candidates),
+                        "candidates": [],
+                    },
                     "generation": {
                         "attempts": attempts,
                         "verification": verification.classification if verification else None,
@@ -680,6 +703,8 @@ async def _answer(
                     "id": c.id,
                     "product": c.product,
                     "category": c.category,
+                    "heading_path": list(c.heading_path),
+                    "title": c.title,
                     "retrieval_score": c.retrieval_score,
                 }
                 for c in all_candidates

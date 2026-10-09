@@ -23,6 +23,15 @@ uvicorn[standard]==0.40.0
 pydantic==2.13.4
 pydantic-settings==2.13.0
 
+# The gold set is validated against contracts/evaluation-dataset.schema.json at
+# run time, not only by the test suite: an invalid dataset must refuse the run
+# before the first question is asked (T140). That import lives in application
+# code, so the library is a runtime dependency — it was in requirements-dev.txt
+# until a container build failed with `ModuleNotFoundError: No module named
+# 'jsonschema'`, which is the whole argument for building the image in CI rather
+# than trusting the virtualenv.
+jsonschema==4.26.0
+
 # --- persistence ---------------------------------------------------------------
 SQLAlchemy==2.0.45
 alembic==1.18.1

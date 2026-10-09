@@ -28,8 +28,7 @@ up: validate-data ## Start the full stack: postgres, backend, frontend
 	@echo "  api       http://localhost:8000/api/v1"
 	@echo "  health    http://localhost:8000/api/v1/health"
 	@echo ""
-	@echo "  Requires GROQ_API_KEY and PINECONE_API_KEY in .env."
-	@echo "  The backend exits at startup and names any that are missing."
+	@$(PY) scripts/check_secrets.py
 
 .PHONY: down
 down: ## Stop the stack, keeping the database volume

@@ -87,6 +87,31 @@ class _UnavailableStore:
         raise self._exc
 
 
+class _StubProvider:
+    """Classifies with zero confidence, and refuses to generate.
+
+    Classification runs before retrieval, so every request in this file calls
+    the classifier. Left unpatched it called the *real* provider, and a provider
+    rate limit turned the empty-store refusal test into a 502 about a subsystem
+    it never asserted — measured twice during live evaluation runs. Zero
+    confidence suppresses the product filter, so what these tests exercise is the
+    vector outage and nothing else; `complete` raising is the assertion that
+    generation was never reached.
+    """
+
+    async def classify(self, **_kwargs: object) -> dict[str, object]:
+        return {
+            "detected_product": None,
+            "detected_category": None,
+            "intent": "factual",
+            "entities": [],
+            "confidence": {"product": 0.0, "category": 0.0, "intent": 0.0, "entities": 0.0},
+        }
+
+    async def complete(self, *_args: object, **_kwargs: object) -> object:
+        raise AssertionError("generation must not be reached in the vector-outage suite")
+
+
 @pytest.fixture
 async def client(monkeypatch: pytest.MonkeyPatch, _schema: None) -> AsyncIterator[AsyncClient]:
     """The app with an unreachable vector service, plus the store itself.
@@ -103,6 +128,15 @@ async def client(monkeypatch: pytest.MonkeyPatch, _schema: None) -> AsyncIterato
 
     store = _UnavailableStore(VectorServiceUnavailable("the vector service is unreachable"))
     monkeypatch.setattr(routes_chat, "get_vector_store", lambda: store)
+    # The provider, too: an empty store refuses at the quality gate *after*
+    # classification, so the classifier runs — and an unpatched one called the
+    # real provider, turning a provider rate limit into a 502 in a suite that
+    # asserts nothing about the provider. Measured twice during live runs.
+    from app.generation import provider as provider_module
+
+    unusable = _StubProvider()
+    monkeypatch.setattr(routes_chat, "get_language_model", lambda: unusable)
+    monkeypatch.setattr(provider_module, "get_language_model", lambda: unusable)
 
     app = create_app(enable_probes=False)
     async with lifespan(app):

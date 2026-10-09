@@ -33,6 +33,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from sqlalchemy.exc import DBAPIError
 
 #: `backend/tests/fixtures/database.py` -> `backend/`.
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -91,12 +92,37 @@ async def truncate_all() -> None:
     documents and units to report the corpus size, and a suite that leaves the
     schema behind fails that test for a reason that has nothing to do with
     either of them.
+
+    **This truncates the developer's working corpus.** The suite is written
+    against the same database the application uses, so a test run empties a
+    corpus that took a crawl to build. Re-register the sources afterwards; the
+    gold-set numbers in `docs/EVALUATION.md` were taken after re-seeding, and
+    are labelled with the corpus they were measured on.
     """
     from app.db.session import get_engine
     from sqlalchemy import text
 
-    async with get_engine().begin() as connection:
-        await connection.execute(text("TRUNCATE sources CASCADE"))
+    # `query_logs` is listed because it has no foreign key to `sources`, so
+    # truncating `sources` never touched it: audit rows accumulated across
+    # suites, and a test that counts them was counting its own history.
+    # `citations` follows `query_logs` by cascade.
+    statement = text("TRUNCATE sources, query_logs, evaluation_questions, evaluation_runs CASCADE")
+
+    # A suite and a running dev server share this database by design, and
+    # TRUNCATE wants an AccessExclusive lock on every table it touches. When the
+    # server is mid-request it holds a RowExclusive lock on one of them, and the
+    # pair deadlocks — measured, twice, as an error in whichever suite happened
+    # to truncate second. A short lock timeout with one retry turns that
+    # deadlock into a fraction of a second of waiting.
+    for attempt in range(2):
+        async with get_engine().begin() as connection:
+            await connection.execute(text("SET LOCAL lock_timeout = '3s'"))
+            try:
+                await connection.execute(statement)
+                return
+            except DBAPIError as exc:  # noqa: PERF203 - the retry is the point
+                if attempt == 1 or "lock" not in str(exc).lower():
+                    raise
 
 
 def describe_connection_failure() -> str:
