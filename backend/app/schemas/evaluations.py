@@ -83,6 +83,13 @@ class EvaluationRun(ApiModel):
     thresholds: dict[str, float] = Field(default_factory=dict)
     gate_outcome: Literal["pass", "fail"]
     gate_failures: list[EvaluationGateFailure] = Field(default_factory=list)
+    # Why a run did not finish, when it did not. Added 2026-10-12 because the
+    # column existed and nothing read it: a run killed by a process restart was
+    # reconciled to `failed` with the reason recorded, and the API reported a
+    # failed run with no explanation. Safe by construction — the value is written
+    # from this application's own strings, never a stack trace and never a
+    # provider error body, so it can be shown to an operator as-is.
+    error: str | None = None
 
 
 class EvaluationResult(ApiModel):

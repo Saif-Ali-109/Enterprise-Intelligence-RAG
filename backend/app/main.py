@@ -316,6 +316,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             extra={"error": type(exc).__name__},
         )
 
+    # The same argument, for the same reason, over evaluation runs. `POST
+    # /evaluations/runs` refuses a second run while any run is `queued` or
+    # `running`, so a run whose task died with the previous process blocks the
+    # feature until someone edits the database by hand. Measured 2026-10-12: the
+    # backend was rebuilt four times during run `3db5cb57`, the task was
+    # cancelled each time, and every later run was refused with CONFLICT while
+    # that row sat `running` — 24 of its 32 questions recorded, none of them
+    # reachable again. Partial results are kept: they are measurements that were
+    # taken.
+    try:
+        from app.db.session import get_session_factory
+        from app.evaluation.runner import fail_orphaned_runs
+
+        factory = get_session_factory()
+        async with factory() as session:
+            await fail_orphaned_runs(
+                session,
+                reason="the process restarted while this run was in progress",
+            )
+    except Exception as exc:  # noqa: BLE001 - reported by /health instead
+        _log.warning(
+            "could not reconcile unfinished evaluation runs at startup",
+            extra={"error": type(exc).__name__},
+        )
+
     try:
         yield
     finally:

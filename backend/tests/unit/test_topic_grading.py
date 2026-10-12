@@ -38,7 +38,7 @@ class TestCoverage:
             expected_heading_path=["Save your search as a filter"],
         )
 
-    def test_wrong_product_category_or_heading_is_a_miss(self) -> None:
+    def test_wrong_product_or_heading_is_a_miss(self) -> None:
         assert not unit_covers_target(
             product="confluence",
             category="filters",
@@ -49,16 +49,39 @@ class TestCoverage:
         )
         assert not unit_covers_target(
             product="jira",
+            category="filters",
+            heading_path=["Create a dashboard"],
+            expected_product="jira",
+            expected_category="filters",
+            expected_heading_path=["Save your search as a filter"],
+        )
+
+    def test_a_category_mismatch_is_no_longer_a_miss(self) -> None:
+        """The amendment of 2026-10-12, asserted so it cannot drift back.
+
+        The expected category was a required condition, and the condition was
+        unsatisfiable: the dataset names `filters`, `spaces`, `oauth`, `boards`
+        and twelve more, while `DocumentCategory` has six URL-derived values.
+        Measured on 164 indexed documents, none carried an expected category, so
+        `recall_at_5`, `precision_at_5` and `mrr` read 0.000 in every run — 21 of
+        25 questions unscoreable by construction.
+
+        A unit whose product and heading path both match is a hit whatever the
+        dataset called the topic area. If this test ever starts failing, the
+        amendment was reverted somewhere without the spec being changed back.
+        """
+        assert unit_covers_target(
+            product="jira",
             category="boards",
             heading_path=["Save your search as a filter"],
             expected_product="jira",
             expected_category="filters",
             expected_heading_path=["Save your search as a filter"],
         )
-        assert not unit_covers_target(
+        assert unit_covers_target(
             product="jira",
-            category="filters",
-            heading_path=["Create a dashboard"],
+            category=None,
+            heading_path=["Save your search as a filter"],
             expected_product="jira",
             expected_category="filters",
             expected_heading_path=["Save your search as a filter"],

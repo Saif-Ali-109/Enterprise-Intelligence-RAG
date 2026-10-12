@@ -103,12 +103,38 @@ def unit_covers_target(
     expected_category: str | None,
     expected_heading_path: list[str],
 ) -> bool:
-    """A unit covers the question's retrieval target (T138)."""
+    """A unit covers the question's retrieval target (T138).
+
+    **`category` is accepted and deliberately not compared** (amended 2026-10-12,
+    FR-063). It was a required condition, and the condition was unsatisfiable:
+    the gold set expects document categories — `filters`, `spaces`,
+    `page-permissions`, `issue-api`, `oauth`, `boards`, `permissions`,
+    `issue-types`, `notifications`, `automation`, `projects`, `troubleshooting`,
+    `issues-and-requests`, `request-management`, `rate-limiting`, `search-api`,
+    `service-desk-api` — while `DocumentCategory` has six values derived from a URL
+    map: `rest-api`, `user-documentation`, `administration`, `developer`,
+    `general`, `root`. Measured on 164 indexed documents, not one carried any
+    expected category, so `recall_at_5`, `precision_at_5` and `mrr` read 0.000 in
+    every run — 21 of 25 questions were unscoreable by construction while their
+    pages sat in the corpus (22 of 25 expected heading paths were present).
+
+    A gate that reports zero for a structural reason is worse than no gate,
+    because it reads as a measurement.
+
+    The two remaining conditions are both about *identity*: the unit belongs to
+    the product the question is about, and its heading path covers the section the
+    topic is documented in. `heading_path` is the precise locator — it is what
+    the extractor derives from the page's own structure — and it is also the
+    field a publisher rename invalidates, which is why it is audited per dataset
+    version rather than pinned to a URL.
+
+    `expected_category` stays in the dataset and in this signature. It is
+    descriptive: it names the topic area a human reads to understand the
+    question, and removing it from the file would lose information while changing
+    no measurement.
+    """
     if expected_product is not None:
         if product is None or normalise(product) != normalise(expected_product):
-            return False
-    if expected_category is not None:
-        if category is None or normalise(category) != normalise(expected_category):
             return False
     if expected_heading_path:
         if not heading_covers(expected_heading_path, heading_path):

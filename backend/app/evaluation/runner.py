@@ -228,6 +228,69 @@ async def _with_throttle_retry(
             await asyncio.sleep(delay * (attempt + 1))
 
 
+async def fail_run(session: AsyncSession, run_id: uuid.UUID, *, reason: str) -> bool:
+    """Move one run to `failed`, recording why. Idempotent.
+
+    Used when the task driving a run dies without reaching a terminal state, and
+    by `fail_orphaned_runs` at startup. Returns whether a row was changed, so a
+    caller can tell "reconciled" from "already terminal" — a run that finished
+    normally must not be relabelled by a late callback.
+    """
+    run = await session.get(EvaluationRun, run_id)
+    if run is None or run.status not in ("queued", "running"):
+        return False
+    run.status = "failed"
+    run.finished_at = datetime.now(UTC)
+    run.error = reason
+    await session.commit()
+    return True
+
+
+async def fail_orphaned_runs(session: AsyncSession, *, reason: str) -> int:
+    """Mark every `queued`/`running` run as failed. Called at startup.
+
+    **Measured 2026-10-12.** The backend was rebuilt four times while run
+    `3db5cb57` was in flight. Each restart cancelled the background task, and the
+    run row stayed `running` for 100 minutes afterwards with 24 of 32 questions
+    recorded and no way to continue it. `POST /evaluations/runs` returns
+    `CONFLICT` while any run is `queued` or `running`, so one interrupted run
+    blocks every future run of the feature — permanently, with no operator action
+    short of editing the database.
+
+    A process cannot reconcile its own death; only the next process can. So this
+    runs once on startup, before anything can ask for a run, and states plainly
+    what happened: the run did not finish. The partial `evaluation_results` rows
+    are left in place — they are measurements that were taken, and deleting them
+    would discard real numbers.
+
+    Called before the application serves traffic, which is why it takes a session
+    rather than making one: the lifespan already has one open.
+    """
+    orphaned = (
+        (
+            await session.execute(
+                select(EvaluationRun).where(EvaluationRun.status.in_(("queued", "running")))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for run in orphaned:
+        run.status = "failed"
+        run.finished_at = datetime.now(UTC)
+        run.error = reason
+    if orphaned:
+        await session.commit()
+        _log.warning(
+            "marked unfinished evaluation runs as failed at startup",
+            extra={
+                "runs": [str(r.id) for r in orphaned],
+                "reason": reason,
+            },
+        )
+    return len(orphaned)
+
+
 async def execute_run(
     run_id: uuid.UUID,
     *,
