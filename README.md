@@ -97,24 +97,27 @@ Five views, in the order a reviewer should meet them.
 
 ### Measured results
 
-The current evaluation run **fails its gate**, and is reported that way. Against 163 documents and
-1150 units:
+The current evaluation runs **fail their gates**, and are reported that way.
 
-- **passing:** zero fabricated facts, zero invalid citations, all four deliberately-unsupported
-  questions refused, citation validity 1.000, cross-product coverage 1.000;
-- **failing:** recall@5 / precision@5 / MRR all 0.000, claim coverage 0.000, faithfulness 0.500,
-  p95 latency 77 175 ms.
+**Passing:** zero fabricated facts and zero invalid citations — the absolute-zero
+gates, which now hold against answers rather than against a corpus too thin to
+produce any; all four deliberately-unsupported questions refused; citation
+validity 1.000; cross-product coverage 1.000.
 
-The retrieval zeros are **not** a ranking result. The gold set expects document categories
-(`filters`, `spaces`, `oauth`, `boards`, …) that the system's vocabulary cannot produce — it has six
-URL-derived values — so the grading condition is unsatisfiable by construction for 21 of 25
-questions. The pages themselves are in the corpus: 22 of the 25 expected heading paths are present.
-The measurement, the evidence, and the three possible fixes are in
-[docs/EVALUATION.md](docs/EVALUATION.md) §1; the fix is a decision about what the metric measures,
-so it is recorded rather than applied.
+**Failing:** recall@5 / precision@5 / MRR, claim coverage, and p95 latency.
 
-Every number here came from a run. The 19-document corpus that came before it looked healthier only
-because nothing was answered.
+The retrieval zeros are structural, not a ranking result, and each cause was
+measured: the gold set expected document categories the system's six-value
+vocabulary cannot produce; the publisher had renamed 19 of the 25 expected
+heading paths; and a confident filter was cutting the Confluence corpus from 33
+pages to a single candidate. The first two are fixed (FR-063 amended, dataset
+1.3.0 audited) and the third is fixed (a filter that leaves less than the
+minimum evidence count now widens). **None of the three fixes has yet had a clean
+run to measure it** — the provider quota was exhausted — so the retrieval gates
+have not been shown to pass, and this README does not claim they do.
+
+The numbers, the evidence for each cause, and what remains unmeasured are in
+[docs/EVALUATION.md](docs/EVALUATION.md) §1.
 
 ---
 
