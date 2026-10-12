@@ -27,8 +27,8 @@ just try to reach Pinecone" is always that.
 below repoints `DATABASE_URL` at a disposable database for the suites that
 truncate, because the DSN has to be right before the settings singleton is read
 at import time — which is earlier than any fixture runs. It creates no session,
-opens no connection on behalf of a passing test, and changes nothing for a
-`-m "unit or contract"` run.
+opens no connection on behalf of a passing test, and needs no database at all when
+PostgreSQL is not running.
 """
 
 from __future__ import annotations
@@ -50,32 +50,30 @@ from tests.fixtures.vendors import (  # noqa: F401 - re-exported as fixtures
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Point the suites that destroy data at a database they may destroy.
+    """Point the whole suite at a database it may destroy.
 
-    The integration and e2e suites truncate nine tables between tests. Until this
-    hook existed they ran against the development database, so `make test-all`
-    erased a crawled corpus — which cost one measured evaluation run, taken
-    again from an empty index (see `tests/fixtures/database.py`).
+    The integration, e2e **and contract** suites truncate nine tables between
+    tests. Until this hook existed they ran against the development database, so
+    `make test-all` erased a crawled corpus — which cost one measured evaluation
+    run, taken again from an empty index (see `tests/fixtures/database.py`).
 
-    The decision is made from the `-m` marker expression rather than from a
-    fixture, because `DATABASE_URL` has to be correct *before* anything reads the
-    settings singleton, and settings are read at import time. Two consequences
-    worth stating:
+    **Every selection is redirected, not just the destructive ones.** The first
+    version redirected only when `-m` mentioned `integration` or `e2e`, on the
+    reasoning that those were the suites that truncate. They were not the only
+    ones: `tests/contract/test_sse_termination.py` and `test_no_reasoning.py`
+    truncate too, and `make check` runs `-m "unit or contract"`. That gap was
+    found by the guard in `truncate_all` refusing to run against the development
+    database during `make check` — the refusal is the check working, and it is why
+    this reads as a design note rather than a post-mortem of a truncated corpus.
 
-    - `-m "unit or contract"` is left alone. Those suites never truncate, and a
-      pure unit run must keep working with no PostgreSQL running at all — the
-      property the `test` target's description promises.
-    - An unreachable PostgreSQL is not an error here. The redirect is applied
-      regardless, and each module's own connection check turns the missing
-      database into a skip, which is what a missing dependency is supposed to be.
+    The decision must be made before anything reads the settings singleton, and
+    settings are read at import time, which is why it is a hook and not a fixture.
+    An unreachable PostgreSQL is not an error here: the redirect is applied
+    regardless, and each module's own connection check turns the missing database
+    into a skip — so a pure unit run still works with no database at all.
 
     `TEST_DATABASE_URL` overrides the derived name for CI.
     """
-    markers = config.getoption("-m", default="") or ""
-    destructive = not markers or "integration" in markers or "e2e" in markers
-    if not destructive:
-        return
-
     from tests.fixtures.database import prepare_test_database
 
     try:
