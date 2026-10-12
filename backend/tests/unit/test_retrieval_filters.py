@@ -111,8 +111,24 @@ class TestWidening:
         plan = build_metadata_filter(_analysis())  # suppressed: nothing to widen
         assert should_widen(plan, []) is False
 
-    def test_a_filtered_search_that_found_something_does_not_widen(self) -> None:
+    def test_a_pool_too_small_to_build_evidence_widens(self) -> None:
+        """The measured case, 2026-10-12: one candidate is already too few.
+
+        "How do I create a new space in Confluence Cloud?" filtered on
+        `{"product": "confluence", "category": "general"}` with the analyzer
+        confident, and 2 of 33 Confluence pages carry `general` — so the search
+        returned a single candidate. One cannot fill the minimum evidence count of
+        3, so the answer was already gone before the reranker saw it.
+        """
         from app.retrieval.retriever import build_metadata_filter, should_widen
 
         plan = build_metadata_filter(_analysis(product="jira", product_conf=0.99))
-        assert should_widen(plan, [object()]) is False
+        assert should_widen(plan, [object()]) is True
+
+    def test_a_pool_large_enough_to_build_evidence_does_not_widen(self) -> None:
+        from app.core.config import get_settings
+        from app.retrieval.retriever import build_metadata_filter, should_widen
+
+        minimum = get_settings().evidence_min_units
+        plan = build_metadata_filter(_analysis(product="jira", product_conf=0.99))
+        assert should_widen(plan, [object() for _ in range(minimum)]) is False

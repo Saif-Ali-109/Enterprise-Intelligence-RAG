@@ -40,7 +40,7 @@ export function DocumentDetail({ documentId }: { documentId: string }) {
   }
   if (query.isError) {
     return (
-      <p role="alert" className="text-sm text-red-700">
+      <p role="alert" className="text-sm text-danger-text">
         This document could not be loaded. {describeError(query.error)}
       </p>
     );

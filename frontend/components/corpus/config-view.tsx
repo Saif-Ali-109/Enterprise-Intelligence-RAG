@@ -38,7 +38,7 @@ export function ConfigView() {
   }
   if (query.isError) {
     return (
-      <p role="alert" className="text-sm text-red-700">
+      <p role="alert" className="text-sm text-danger-text">
         {describeError(query.error)}
       </p>
     );
@@ -110,7 +110,7 @@ export function ConfigView() {
             label="Reasoning exposed"
             value={
               config.generation.reasoning_exposed ? (
-                <span className="text-red-700">true — this is a contract violation</span>
+                <span className="text-danger-text">true — this is a contract violation</span>
               ) : (
                 "false"
               )

@@ -25,10 +25,10 @@ import { describeError, system, type DependencyState } from "@/lib/api-client";
 function Verdict({ state }: { state: DependencyState }) {
   const className =
     state === "ok"
-      ? "text-green-800"
+      ? "text-success-text"
       : state === "degraded"
-        ? "text-amber-800"
-        : "text-red-700";
+        ? "text-warning-text"
+        : "text-danger-text";
   return <span className={className}>{state}</span>;
 }
 
@@ -44,7 +44,7 @@ export function HealthView() {
   }
   if (query.isError) {
     return (
-      <p role="alert" className="text-sm text-red-700">
+      <p role="alert" className="text-sm text-danger-text">
         {describeError(query.error)}
       </p>
     );

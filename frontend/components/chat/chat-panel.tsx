@@ -30,7 +30,7 @@
  * would look like one the system can reproduce — and `GET /chat/{request_id}`
  * answers `NOT_FOUND`, so it cannot.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AskResponse } from "@/lib/api-client";
 import { QUESTION_MAX_LENGTH } from "@/hooks/useChat";
 import { useAskStream } from "@/hooks/useAskStream";
@@ -55,6 +55,45 @@ export function ChatPanel() {
   const trimmed = question.trim();
   const tooLong = question.length > QUESTION_MAX_LENGTH;
   const canAsk = trimmed !== "" && !tooLong && !stream.state.isStreaming;
+
+  /*
+   * Focus is recovered only when the browser dropped it.
+   *
+   * Ask disables itself while streaming — the honest thing to do with a button
+   * that would submit a second question — and a disabled button drops focus to
+   * `<body>` in Chromium. The next Tab then restarts from the top of the
+   * document, so a keyboard user who asked a question and waited was returned to
+   * the banner, with their place lost and the answer below them announced only by
+   * the live region.
+   *
+   * So focus moves to the result's heading when — and only when — it was actually
+   * lost. It does not move when the user has tabbed somewhere else, or is still
+   * in the textarea about to ask a follow-up: taking focus from a reader who
+   * still has it is a worse defect than the one being fixed.
+   *
+   * `tabIndex={-1}` below makes the heading focusable without adding it to the
+   * tab order, so nobody has to Tab through it to reach the citations.
+   */
+  const result = stream.state.result;
+  const fault = stream.state.fault;
+  useEffect(() => {
+    const target =
+      fault !== null
+        ? "unavailable-heading"
+        : result === null
+          ? null
+          : result.outcome === "refused"
+            ? "refusal-heading"
+            : "answer-heading";
+    if (target === null) {
+      return;
+    }
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) {
+      return;
+    }
+    document.getElementById(target)?.focus();
+  }, [result, fault]);
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -154,7 +193,9 @@ function AnswerRegion({ response }: { response: AskResponse }) {
   return (
     <Card labelledBy="answer-heading">
       <CardHeader>
-        <CardTitle id="answer-heading">Answer</CardTitle>
+        <CardTitle id="answer-heading" tabIndex={-1}>
+          Answer
+        </CardTitle>
         <p className="text-xs text-muted-foreground">
           {`Asked: ${response.question}`}
           <span aria-hidden="true"> · </span>

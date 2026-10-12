@@ -461,7 +461,16 @@ class GroqProvider:
             if self._client is not None:
                 response = await self._client.request(method, url, **kwargs)
             else:
-                client_cm = SharedClient()
+                client_cm = SharedClient(
+                    # `groq_timeout_seconds`, not the crawler's default. Found on
+                    # 2026-10-12: the setting existed, was documented, and nothing
+                    # read it — `SharedClient()` with no argument falls back to
+                    # `crawl_timeout_seconds` (20 s), so every provider request ran
+                    # on a timeout configured for fetching web pages. A setting
+                    # that silently does nothing is worse than a missing one,
+                    # because it looks like a knob.
+                    timeout_seconds=settings.groq_timeout_seconds,
+                )
                 client = await client_cm.__aenter__()
                 try:
                     response = await client.request(method, url, **kwargs)

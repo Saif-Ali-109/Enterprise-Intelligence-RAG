@@ -255,8 +255,11 @@ A curated assessment item (FR-039, FR-040, FR-063).
 | `created_at` | `TIMESTAMPTZ` | no | |
 
 **There is deliberately no `source_url` column** (FR-063, FR-064). Grading is by topic
-coverage, so a publisher reorganising their documentation cannot invalidate the dataset. The
-same exclusion is enforced structurally in
+coverage — expected product and heading path — so a publisher reorganising their documentation
+cannot invalidate the dataset. The `category` column is descriptive: it names the topic area for
+a human reader and is not a hit condition, since no document could carry the categories the
+dataset names (FR-063, amended 2026-10-12). The same exclusion is enforced
+structurally in
 [contracts/evaluation-dataset.schema.json](./contracts/evaluation-dataset.schema.json), so a
 pinned URL cannot be smuggled in through the file either.
 

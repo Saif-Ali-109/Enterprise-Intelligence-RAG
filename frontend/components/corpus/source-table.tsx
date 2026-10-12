@@ -60,7 +60,7 @@ function LastCrawl({
       <span className="font-mono">{stamp}</span>
       <span
         className={
-          status === "failed" || status === "cancelled" ? "text-red-700" : "text-muted-foreground"
+          status === "failed" || status === "cancelled" ? "text-danger-text" : "text-muted-foreground"
         }
       >
         {status ?? "unknown"}
@@ -81,7 +81,7 @@ export function SourceTable() {
     return <p className="text-sm text-muted-foreground">Loading sources…</p>;
   }
   if (query.isError) {
-    return <p role="alert" className="text-sm text-red-700">{describeError(query.error)}</p>;
+    return <p role="alert" className="text-sm text-danger-text">{describeError(query.error)}</p>;
   }
 
   const { items, total } = query.data;
@@ -153,7 +153,7 @@ export function SourceTable() {
                         <span>Stop indexing this source?</span>
                         <button
                           type="button"
-                          className="rounded-sm border border-red-700 px-2 py-1 text-xs text-red-700"
+                          className="rounded-sm border border-danger-border px-2 py-1 text-xs text-danger-text"
                           onClick={() => {
                             remove.mutate(item.id);
                             setConfirmingId(null);

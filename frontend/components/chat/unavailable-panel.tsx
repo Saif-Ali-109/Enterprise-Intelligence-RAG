@@ -31,7 +31,9 @@ export function UnavailablePanel({ error }: UnavailablePanelProps) {
   return (
     <Card labelledBy="unavailable-heading">
       <CardHeader>
-        <CardTitle id="unavailable-heading">The question could not be completed</CardTitle>
+        <CardTitle id="unavailable-heading" tabIndex={-1}>
+          The question could not be completed
+        </CardTitle>
         <p className="text-sm">{describeError(error)}</p>
       </CardHeader>
       <CardContent>

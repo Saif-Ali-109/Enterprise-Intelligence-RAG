@@ -38,7 +38,9 @@ export function RefusalPanel({ response }: RefusalPanelProps) {
       className="border-l-4 border-l-muted-foreground/50 bg-muted/30"
     >
       <CardHeader>
-        <CardTitle id="refusal-heading">Not answered</CardTitle>
+        <CardTitle id="refusal-heading" tabIndex={-1}>
+          Not answered
+        </CardTitle>
         <p className="text-sm">{describeRefusal(response.refusal_reason)}</p>
       </CardHeader>
       <CardContent>

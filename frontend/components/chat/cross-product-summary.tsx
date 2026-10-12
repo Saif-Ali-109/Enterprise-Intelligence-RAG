@@ -45,12 +45,12 @@ export function CrossProductSummary({ response }: CrossProductSummaryProps) {
       ) : null}
       {groups.map((group) => (
         <section key={group.product} aria-labelledby={`group-${group.product}`} className="grid gap-2">
-          <h4 id={`group-${group.product}`} className="text-sm font-medium">
+          <h3 id={`group-${group.product}`} className="text-sm font-medium">
             {group.product}
             <span className="ml-2 font-normal text-muted-foreground">
               {`${group.citations.length} ${group.citations.length === 1 ? "source" : "sources"}`}
             </span>
-          </h4>
+          </h3>
           <CitationList citations={group.citations} />
         </section>
       ))}

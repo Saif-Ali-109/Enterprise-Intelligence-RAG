@@ -460,7 +460,7 @@ function FieldError({ id, message }: { id: string; message: string | undefined }
     return null;
   }
   return (
-    <p id={id} className="text-xs font-medium text-destructive">
+    <p id={id} className="text-xs font-medium text-danger-text">
       {message}
     </p>
   );

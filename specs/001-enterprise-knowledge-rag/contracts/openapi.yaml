@@ -1275,6 +1275,14 @@ components:
               gate: { type: string }
               target: { type: number }
               actual: { type: number }
+        error:
+          type: [string, 'null']
+          description: >-
+            Why the run did not finish, when it did not. Absent on a run that
+            completed. Added 2026-10-12: the column existed and nothing read it, so
+            a run killed by a process restart was reconciled to `failed` and the
+            API reported the failure with no explanation. Never a stack trace and
+            never a provider error body.
 
     EvaluationResult:
       type: object

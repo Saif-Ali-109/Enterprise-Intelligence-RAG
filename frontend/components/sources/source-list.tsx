@@ -290,12 +290,12 @@ function SourceRow({
         </div>
 
         {remove.isError ? (
-          <p role="alert" className="mt-1 text-xs font-medium text-destructive">
+          <p role="alert" className="mt-1 text-xs font-medium text-danger-text">
             {describeError(remove.error)}
           </p>
         ) : null}
         {update.isError ? (
-          <p role="alert" className="mt-1 text-xs font-medium text-destructive">
+          <p role="alert" className="mt-1 text-xs font-medium text-danger-text">
             {describeError(update.error)}
           </p>
         ) : null}

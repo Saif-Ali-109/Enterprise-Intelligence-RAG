@@ -16,22 +16,26 @@ mean over the questions where a number exists.
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.logging import new_request_id, reset_request_id, set_request_id
+from app.core.logging import get_logger, new_request_id, reset_request_id, set_request_id
 from app.db.models import Document, DocumentUnit, EvaluationResult, EvaluationRun
 from app.db.session import get_session_factory
 from app.evaluation import metrics as m
 from app.evaluation.dataset import by_id, dataset_fingerprint, load_dataset
 from app.evaluation.metrics import PerformanceStats
+
+_log = get_logger(__name__)
 
 __all__ = [
     "RunInProgress",
@@ -167,6 +171,126 @@ def gate_outcome(
     return ("pass" if not failures else "fail"), failures
 
 
+async def _with_throttle_retry(
+    operation: Callable[[], Awaitable[Any]],
+    *,
+    question: str,
+    settings: Any,
+) -> Any:
+    """Run `operation`, retrying a throttled provider a bounded number of times.
+
+    **Why the runner retries and the request path does not.** Measured 2026-10-09
+    on run `fb88cffa`: 5 of 32 questions raised `ProviderRateLimited` from a
+    free-tier quota part-way through, so the quality metrics were computed over 27
+    questions and the run's p95 carried the throttling. A throttled provider is not
+    a property of the pipeline, and a measurement of the pipeline taken while the
+    provider is throttling it measures the throttle.
+
+    A user waiting on one question is told to try again; a run of thirty-two
+    questions cannot be, because a partial run produces partial metrics and says
+    nothing about the ones it skipped.
+
+    Only `PROVIDER_RATE_LIMITED` is retried, and the delay grows with each attempt.
+    A `PROVIDER_ERROR` is not: it means the provider returned something unusable,
+    and repeating the request would measure the provider's mood.
+
+    **The report stays honest.** A question that still fails after the retries
+    raises, and the caller records it as an error — so `error_rate` keeps meaning
+    "questions that could not be completed", not "questions that hit a throttle
+    once". A throttle that survives the retries is a real failure of the run to
+    produce its measurements.
+    """
+    from app.core.errors import ErrorCode
+
+    # Clamped to zero rather than to one: `eval_question_retries = 0` has to mean *no
+    # retries*, or the setting cannot be turned off — and a knob that cannot be
+    # turned off is not a knob.
+    attempts = max(0, int(getattr(settings, "eval_question_retries", 1)))
+    delay = float(getattr(settings, "eval_retry_delay_seconds", 8.0))
+
+    for attempt in range(attempts + 1):
+        try:
+            return await operation()
+        except Exception as exc:  # noqa: BLE001 - re-raised below
+            if getattr(exc, "code", None) != ErrorCode.PROVIDER_RATE_LIMITED:
+                raise
+            if attempt >= attempts:
+                raise
+            _log.warning(
+                "evaluation question throttled by the provider; retrying",
+                extra={
+                    "question_id": question,
+                    "attempt": attempt + 1,
+                    "attempts": attempts,
+                    "delay_seconds": delay * (attempt + 1),
+                },
+            )
+            await asyncio.sleep(delay * (attempt + 1))
+
+
+async def fail_run(session: AsyncSession, run_id: uuid.UUID, *, reason: str) -> bool:
+    """Move one run to `failed`, recording why. Idempotent.
+
+    Used when the task driving a run dies without reaching a terminal state, and
+    by `fail_orphaned_runs` at startup. Returns whether a row was changed, so a
+    caller can tell "reconciled" from "already terminal" — a run that finished
+    normally must not be relabelled by a late callback.
+    """
+    run = await session.get(EvaluationRun, run_id)
+    if run is None or run.status not in ("queued", "running"):
+        return False
+    run.status = "failed"
+    run.finished_at = datetime.now(UTC)
+    run.error = reason
+    await session.commit()
+    return True
+
+
+async def fail_orphaned_runs(session: AsyncSession, *, reason: str) -> int:
+    """Mark every `queued`/`running` run as failed. Called at startup.
+
+    **Measured 2026-10-12.** The backend was rebuilt four times while run
+    `3db5cb57` was in flight. Each restart cancelled the background task, and the
+    run row stayed `running` for 100 minutes afterwards with 24 of 32 questions
+    recorded and no way to continue it. `POST /evaluations/runs` returns
+    `CONFLICT` while any run is `queued` or `running`, so one interrupted run
+    blocks every future run of the feature — permanently, with no operator action
+    short of editing the database.
+
+    A process cannot reconcile its own death; only the next process can. So this
+    runs once on startup, before anything can ask for a run, and states plainly
+    what happened: the run did not finish. The partial `evaluation_results` rows
+    are left in place — they are measurements that were taken, and deleting them
+    would discard real numbers.
+
+    Called before the application serves traffic, which is why it takes a session
+    rather than making one: the lifespan already has one open.
+    """
+    orphaned = (
+        (
+            await session.execute(
+                select(EvaluationRun).where(EvaluationRun.status.in_(("queued", "running")))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for run in orphaned:
+        run.status = "failed"
+        run.finished_at = datetime.now(UTC)
+        run.error = reason
+    if orphaned:
+        await session.commit()
+        _log.warning(
+            "marked unfinished evaluation runs as failed at startup",
+            extra={
+                "runs": [str(r.id) for r in orphaned],
+                "reason": reason,
+            },
+        )
+    return len(orphaned)
+
+
 async def execute_run(
     run_id: uuid.UUID,
     *,
@@ -192,6 +316,7 @@ async def execute_run(
 
         dataset, raw = load_dataset(dataset_path)
         questions = by_id(dataset)
+        settings = get_settings()
 
         perf = PerformanceStats()
         per_question: list[dict[str, Any]] = []
@@ -212,13 +337,21 @@ async def execute_run(
             token = set_request_id(new_request_id())
             try:
                 try:
-                    chat_result = await run_chat(
-                        q.question,
-                        session=session,
-                        store=store,
-                        provider=provider,
-                        inspect=True,
-                        emit=None,
+                    chat_result = await _with_throttle_retry(
+                        # `partial` rather than a lambda: it binds this
+                        # iteration's question at construction, so nothing
+                        # depends on the closure being awaited immediately.
+                        partial(
+                            run_chat,
+                            q.question,
+                            session=session,
+                            store=store,
+                            provider=provider,
+                            inspect=True,
+                            emit=None,
+                        ),
+                        question=q.id,
+                        settings=settings,
                     )
                     payload = chat_result.payload
                 except Exception as exc:  # noqa: BLE001 - one question never sinks the run

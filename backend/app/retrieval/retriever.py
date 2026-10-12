@@ -89,7 +89,7 @@ def build_metadata_filter(
 
 
 def should_widen(plan: FilterPlan, hits: Sequence[Any]) -> bool:
-    """Whether an empty *filtered* pool should be re-run with no filter.
+    """Whether a *filtered* pool that is too small should be re-run wide.
 
     The narrowest reading of FR-010 is "widen when confidence is low", and this
     is the case it misses: confidence was 0.99 and the filter was still wrong,
@@ -97,6 +97,21 @@ def should_widen(plan: FilterPlan, hits: Sequence[Any]) -> bool:
     anything. Measured on the first live retrieval run — `{"product": "jira",
     "category": "api"}` against a corpus of `rest-api` returned zero candidates
     and produced a refusal for a page that answered the question.
+
+    **Measured 2026-10-12, the case this threshold was widened for.** Zero
+    candidates is not the only way a confident filter removes the answer. Asking
+    "How do I create a new space in Confluence Cloud?" applied
+    `{"product": "confluence", "category": "general"}` — the analyzer was
+    confident, and `general` is a real category value — and against 33 Confluence
+    pages of which **2** carry `general`, the search returned **one** candidate.
+    One candidate cannot fill the minimum evidence count of 3, so the pipeline
+    had already lost the answer before the reranker saw it, and every retrieval
+    metric read 0.000.
+
+    The rule is therefore not "widen when empty" but "widen when the filter has
+    left too little to work with": fewer candidates than `evidence_min_units`.
+    That is the point at which the filter, whatever the classifier's confidence,
+    has demonstrably removed what a good answer needs.
 
     Two properties keep this from becoming "search twice always":
 
@@ -108,7 +123,9 @@ def should_widen(plan: FilterPlan, hits: Sequence[Any]) -> bool:
       reports the widened scope, so the widening is visible rather than a
       silently better-looking result.
     """
-    return plan.filter is not None and not hits
+    if plan.filter is None:
+        return False
+    return len(hits) < get_settings().evidence_min_units
 
 
 @dataclass(frozen=True, slots=True)

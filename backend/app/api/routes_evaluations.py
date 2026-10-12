@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from functools import partial
 
 from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy import func, select
@@ -54,6 +55,7 @@ def _run_out(run: EvaluationRun) -> EvaluationRunOut:
         thresholds=run.thresholds,
         gate_outcome=run.gate_outcome,
         gate_failures=run.gate_failures,
+        error=run.error,
     )
 
 
@@ -127,11 +129,63 @@ async def start_run(session: Session, response: Response) -> EvaluationRunOut:
         from app.core.errors import StateConflict as Conflict
 
         raise Conflict(str(exc)) from exc
-    asyncio.create_task(
+    task = asyncio.create_task(
         execute_run(run.id, store=get_vector_store(), provider=get_language_model()),
         name=f"evaluation-run-{run.id}",
     )
+    # **A run whose task dies must not stay `running` (measured 2026-10-12).**
+    # `POST /evaluations/runs` refuses a second run while any run is `queued` or
+    # `running`, so a task that dies — a crash, a cancellation, a restart — leaves
+    # the feature permanently blocked with no operator action available. Measured:
+    # the backend was rebuilt four times during run `3db5cb57`, the task was
+    # cancelled each time, and the run sat `running` for 100 minutes with 24 of 32
+    # questions recorded and every later run refused with CONFLICT.
+    #
+    # The done-callback is the only place that sees a cancellation: `except
+    # Exception` inside the run would not, because `CancelledError` derives from
+    # `BaseException` in Python 3.8 and later. So the handler is registered on the
+    # task and takes `BaseException` deliberately, recording what happened rather
+    # than letting a row promise work that is no longer happening.
+    task.add_done_callback(partial(_record_task_outcome, run_id=run.id))
     return _run_out(run)
+
+
+def _record_task_outcome(task: asyncio.Task[None], *, run_id: uuid.UUID) -> None:
+    """Mark a run failed when its task raised, was cancelled, or never started.
+
+    Best-effort by construction: this runs in the event loop after the task
+    finished, opens its own session, and swallows its own failures. An error while
+    recording an error would leave the original fault invisible, which is the one
+    outcome this exists to prevent.
+    """
+    from app.core.logging import get_logger
+    from app.db.session import get_session_factory
+    from app.evaluation.runner import fail_run
+
+    log = get_logger(__name__)
+    if not task.cancelled() and task.exception() is None:
+        return  # the run finished normally and recorded its own outcome
+
+    reason = (
+        "the process restarted while this run was in progress"
+        if task.cancelled()
+        else f"the run task failed: {type(task.exception()).__name__}"
+    )
+    log.error("evaluation run did not finish", extra={"run_id": str(run_id), "reason": reason})
+
+    async def _write() -> None:
+        factory = get_session_factory()
+        async with factory() as session:
+            await fail_run(session, run_id, reason=reason)
+
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_write())
+    except RuntimeError:  # pragma: no cover - the loop is closing
+        log.error(
+            "could not record the unfinished evaluation run",
+            extra={"run_id": str(run_id), "reason": reason},
+        )
 
 
 @router.get(
