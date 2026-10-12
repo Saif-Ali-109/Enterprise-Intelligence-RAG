@@ -16,17 +16,17 @@ Two rules govern everything below:
 
 ## 1. Measured results
 
-This is the honest record of real runs against real corpora. Nothing here is illustrative, and
-**the headline is a failure**: the absolute-zero gate does not currently hold.
+This is the honest record of real runs against real corpora. Nothing here is
+illustrative.
 
 | | |
 |---|---|
-| **Run id** | `fb88cffa-2aeb-48b3-994c-ddab89c63ff5` |
-| **Dataset** | version `1.2.0`, fingerprint `68d76c26e6fc063c…` |
-| **Started → finished** | 2026-10-09T18:32:27Z → 2026-10-09T18:39:18Z (6 min 51 s) |
-| **Corpus** | 157 documents, 1100 units — 18 registered sources across four products |
+| **Run id** | `72a40bc7-f1ed-4c5c-afd3-ee7878cbd06e` |
+| **Dataset** | version `1.3.0`, fingerprint `f2a9fd38e29d188b…` |
+| **Started → finished** | 2026-10-12T13:46:09Z → 2026-10-12T13:59:43Z (13 min 34 s) |
+| **Corpus** | 163 documents, 1150 units — 24 registered sources across four products |
 | **Provider** | `openai/gpt-oss-120b` via Groq; rerank `bge-reranker-v2-m3` |
-| **Outcome** | **`fail`** — 7 gates outside their thresholds, including the absolute zero |
+| **Outcome** | **`fail`** — 6 gates outside their thresholds |
 
 ### Metrics as measured
 
@@ -38,81 +38,97 @@ This is the honest record of real runs against real corpora. Nothing here is ill
 | `cross_product_domain_coverage` | 1.000 | ≥ 0.80 | pass |
 | `citation_validity` | 1.000 | ≥ 0.98 | pass |
 | `claim_coverage` | **0.000** | ≥ 0.85 | **fail** |
-| `faithfulness` | **0.233** | ≥ 0.90 | **fail** |
+| `faithfulness` | **0.500** | ≥ 0.90 | **fail** |
 | `unsupported_refusal_rate` | 1.000 | = 1.00 | pass |
-| `fabricated_fact_count` | **3** | = 0 | **fail** |
-| `invalid_citation_count` | **0** | = 0 | pass |
-| `p50_latency_ms` | 8093 | — | reported |
-| `p95_latency_ms` | **32 500** | ≤ 8000 | **fail** |
+| `fabricated_fact_count` | **0** | = 0 | **pass** |
+| `invalid_citation_count` | **0** | = 0 | **pass** |
+| `p50_latency_ms` | 20 289 | — | reported |
+| `p95_latency_ms` | **77 175** | ≤ 8000 | **fail** |
 | `error_rate` | 0.156 | — | reported |
 
-Six questions answered, 21 refused, 5 raised. Every one of the 21 refusals carried a stated
-reason.
+**The absolute-zero gate holds for the first time**, after the uncited-claim
+enforcement landed on 2026-10-12. Four questions answered, 23 refused, five
+raised on a provider error.
 
-### The absolute zero is the finding that matters
+### Why retrieval is 0.000, which is not a ranking problem
 
-`fabricated_fact_count = 3` is not a rounding artefact and not a metric that disagrees with the
-runtime. It is three genuine, uncited, actionable claims:
+This is the finding that matters most in this document, and it was measured
+rather than inferred.
 
-> "To set the restrictions, open the Share dialog on the page, choose 'Restrict' and select
-> whether you want to limit 'Can view' or 'Can edit' to specific users or groups."
+The gold set records an expected `category` for 21 of its 25 questions with a
+heading path: `filters`, `spaces`, `page-permissions`, `issue-api`, `oauth`,
+`boards`, `permissions`, `issue-types`, `notifications`, `automation`,
+`projects`, `troubleshooting`, `issues-and-requests`, `request-management`,
+`rate-limiting`, `search-api`, `service-desk-api`.
 
-That sentence carries no citation, in an answer that otherwise cites correctly. It is the most
-useful sentence in the answer — a procedure a reader would follow — and nothing in the system
-stopped it reaching a client.
+**None of those is a value the system can produce.** `DocumentCategory`
+(`app/core/config.py`) has exactly six, derived from a URL map: `rest-api`,
+`user-documentation`, `administration`, `developer`, `general`, `root`. The
+labels actually present on the 163 indexed documents are:
 
-**The prompt already promises this cannot happen.** It instructs the model to mark every claim and
-states that an answer whose sentences carry no markers is refused. The generation step verifies
-that the answer as a whole is `SUPPORTED` by the evidence, which it was; it never checks that each
-claim is marked. So the promise lives in the prompt, the enforcement does not exist, and the
-evaluation found the gap. Fixing it is a product decision with a measured cost, recorded in
-[tasks.md](../specs/001-enterprise-knowledge-rag/tasks.md) and not resolved here: an earlier live
-measurement found the model produces inline markers in 3 of 6 answers, so enforcing the promise
-strictly would refuse roughly half of all answerable questions over a formatting habit, while
-their citations resolve perfectly well.
+| product | category | documents |
+|---|---|---|
+| jira | `user-documentation` | 47 |
+| jira | `rest-api` | 47 |
+| confluence | `user-documentation` | 33 |
+| jsm | `user-documentation` | 25 |
+| jira | `root` / `developer` / `general` | 3 / 3 / 1 |
+| confluence | `general` | 2 |
+| jsm | `general` | 2 |
 
-### Retrieval: zero, and the dataset has drifted
+`unit_covers_target` requires `unit.category == expected.category`. With no
+document able to carry any of the 21 expected values, that condition can never be
+true, so `recall_at_5`, `precision_at_5` and `mrr` are **pinned at 0.000 by
+construction** — for every question with a category, whatever the retriever
+does. 22 of the 25 expected heading paths are present in the corpus, so the
+pages are there; they cannot be counted.
 
-`recall_at_5 = 0.000` after 157 documents and 1100 units — worse than the 0.036 the 19-document
-corpus produced, and that is not a paradox. Recall is graded by whether a retrieved unit covers the
-expected **product, category and heading path**, and Atlassian has renamed the pages the gold set
-was written against. Measured against the live corpus: of the 25 expected heading paths, **6 are
-present and 19 no longer exist under that wording** — "service space agents" is now "service
-project agents", "Delete, restore, or purge a content item" is now "…a page". The gold set is
-version 1.2.0 and its labels are stale; the metric is faithfully reporting that the expected
-targets are not in the corpus.
+**This is a defect in the dataset as authored, not in the pipeline.** The
+dataset's own `notes` record a 2026-10-02 audit that re-derived heading paths
+from real pages; the same audit was never applied to `category`, and the field
+was written against a taxonomy the system never implemented.
 
-That is a dataset problem, not a retrieval one, and it is **not fixed here** — editing the gold
-set's expected labels to match today's corpus would be moving the goalposts to make a number look
-better. It is stated so the number can be read correctly.
+The fix is a decision about what the metric measures — grade on product and
+heading path and treat category as descriptive, or teach the extractor to
+classify pages into a topic taxonomy — so it is **not applied here**. Recording
+it is; a gate that reports 0.000 for a structural reason is worse than no gate,
+because it looks like a measurement.
+
+### The other two failing gates
+
+**`p95_latency_ms = 77 175`** against 8000 ms, p50 20 289 ms. Five questions
+raised `ProviderError` — not `PROVIDER_RATE_LIMITED`, so the runner does not retry
+them — and each one waits out the classification, retrieval, rerank and generation
+stages before failing. `error_rate = 0.156` records this honestly rather than
+averaging it away.
+
+**`claim_coverage = 0.000` and `faithfulness = 0.500`** over four answers. Both
+are measured on answers only, so four questions is a thin basis; neither should
+be read as a quality verdict until the retrieval gates can pass and more
+questions are answerable.
 
 ### What this run does establish
 
-- **all four deliberately-unsupported questions were refused** (`unsupported_refusal_rate = 1.000`),
-  including the version question that a previous corpus answered from a page breadcrumb;
-- **zero invalid citations** — every citation the model issued resolved to evidence that was
-  actually served (`citation_validity = 1.000`);
-- cross-product coverage 1.000: every cross-product question consulted at least two products.
-
-### What is wrong with the system, not the corpus
-
-**`p95_latency_ms = 32 500`** against an 8000 ms target, with p50 at 8093 ms. Two causes, both
-real: the corpus is now 1100 units rather than 149, and 5 of 32 questions raised rather than
-answered because the provider's quota was exhausted mid-run. A rate-limited provider is an
-environment fact, not a defect, and it is recorded as `error_rate` rather than averaged away.
+- **zero fabricated facts and zero invalid citations** — the absolute zeros hold;
+- **all four deliberately-unsupported questions refused** (`1.000`);
+- `citation_validity = 1.000` — every citation the model issued resolved to
+  evidence that was actually served;
+- cross-product coverage `1.000` — every cross-product question consulted at
+  least two products.
 
 ### Earlier runs, for comparison
 
-| Run | Corpus | Outcome | Notable |
-|---|---|---|---|
-| `dfa3a1fd` (2026-10-07) | 19 docs / 149 units | fail | All questions refused; no generation ran, so the absolute zeros were untested |
-| `b6d452a3` (2026-10-09) | 19 docs / 149 units | fail | Same, inside the container image |
-| `68350c4a` (2026-10-09) | 132 docs / 841 units | fail | **Navigation was still in the corpus**: one published answer asserted an API version, grounded in a breadcrumb containing the string `REST API v2`. Ten questions errored on provider rate limits. |
-| `fb88cffa` (2026-10-09) | 157 docs / 1100 units | fail | After the navigation filter and the fingerprint fix. That version question now **refuses**. Three uncited claims remain — the finding above. |
+| Run | Dataset | Corpus | Outcome | Notable |
+|---|---|---|---|---|
+| `dfa3a1fd` | 1.1.0 | 19 docs / 149 units | fail | All questions refused; nothing generated, so the absolute zeros were untested |
+| `b6d452a3` | 1.2.0 | 19 docs / 149 units | fail | Same, inside the container image |
+| `68350c4a` | 1.2.0 | 132 docs / 841 units | fail | **Navigation was still in the corpus**: a published answer asserted an API version, grounded in a breadcrumb containing `REST API v2` |
+| `fb88cffa` | 1.2.0 | 157 docs / 1100 units | fail | After the navigation filter and the fingerprint fix; that version question now refuses. Three uncited claims — the absolute zero failed |
+| `72a40bc7` | **1.3.0** | 163 docs / 1150 units | fail | **Absolute zero passes.** Retrieval still 0.000, now explained: the dataset's categories are outside the system's vocabulary |
 
-The progression matters more than any single row: the absolute zeros looked green for two runs
-simply because nothing was answered, and only became measurable once the corpus was large enough
-for the pipeline to actually generate.
+The progression is the point. The absolute zeros looked green for two runs only
+because nothing was answered, and the retrieval zeros have been structural since
+the first run.
 
 ---
 

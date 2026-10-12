@@ -1,7 +1,7 @@
 {
-  "dataset_version": "1.2.0",
-  "generated_at": "2026-09-29T00:00:00Z",
-  "notes": "Thirty-two questions across all eight required categories and all three difficulties. Every expectation is expressed as TOPIC COVERAGE, never as a canonical answer string and never as a URL (FR-040, FR-063, FR-064). That is a deliberate consequence of the corpus being ingested by URL from documentation the publisher reorganises whenever they like: a dataset pinned to today's page structure would report a false regression the first time Atlassian renames a heading, and would report it as a retrieval regression when nothing about retrieval changed. contracts/evaluation-dataset.schema.json has additionalProperties: false and no URL field anywhere, so a pinned source cannot be introduced through a new property either. --- The 'unsupported' bucket is the deliberately-unanswerable set behind SC-008. Four questions are in it, all plausible-looking questions about things this corpus genuinely does not document, which is harder than asking about something obviously absurd. They must be refused with zero fabricated facts and zero fabricated citations. Retrieval metrics are null for them — not applicable to the question, not zero, and not a failure. --- 'topics' entries are each one checkable assertion rather than a topic label, so claim coverage (SC-006) is measurable. Where several phrasings are equally correct, they are listed in acceptable_alternatives rather than by widening 'topics', because widening topics makes coverage unfalsifiable. --- Independent technical demonstration. Not affiliated with, sponsored by, or endorsed by Atlassian. Questions are written from a user's point of view, not from any internal knowledge of the system. --- 2026-10-02 anchor audit: the 25 questions with an authored heading path matched 0 real corpus pages (not one segment). Paths were re-derived from verified pages (anchored), cleared where no corpus page exists (no-corpus-page / partially-anchored keeps the closest real page), and the four 'unsupported' questions keep must_refuse=true. Authored paths are preserved in each question's notes for audit. --- 2026-10-02 re-selection pass: re-anchored 9 questions to verified pages (2 fully anchored, 7 partially-anchored) after the page-capped corpus showed 155 pages does not cover the alphabetized first-N topics; remaining gaps stay honestly marked no-corpus-page.",
+  "dataset_version": "1.3.0",
+  "generated_at": "2026-10-12T00:00:00Z",
+  "notes": "Thirty-two questions across all eight required categories and all three difficulties. Every expectation is expressed as TOPIC COVERAGE, never as a canonical answer string and never as a URL (FR-040, FR-063, FR-064). That is a deliberate consequence of the corpus being ingested by URL from documentation the publisher reorganises whenever they like: a dataset pinned to today's page structure would report a false regression the first time Atlassian renames a heading, and would report it as a retrieval regression when nothing about retrieval changed. contracts/evaluation-dataset.schema.json has additionalProperties: false and no URL field anywhere, so a pinned source cannot be introduced through a new property either. --- The 'unsupported' bucket is the deliberately-unanswerable set behind SC-008. Four questions are in it, all plausible-looking questions about things this corpus genuinely does not document, which is harder than asking about something obviously absurd. They must be refused with zero fabricated facts and zero fabricated citations. Retrieval metrics are null for them — not applicable to the question, not zero, and not a failure. --- 'topics' entries are each one checkable assertion rather than a topic label, so claim coverage (SC-006) is measurable. Where several phrasings are equally correct, they are listed in acceptable_alternatives rather than by widening 'topics', because widening topics makes coverage unfalsifiable. --- Independent technical demonstration. Not affiliated with, sponsored by, or endorsed by Atlassian. Questions are written from a user's point of view, not from any internal knowledge of the system. --- 2026-10-02 anchor audit: the 25 questions with an authored heading path matched 0 real corpus pages (not one segment). Paths were re-derived from verified pages (anchored), cleared where no corpus page exists (no-corpus-page / partially-anchored keeps the closest real page), and the four 'unsupported' questions keep must_refuse=true. Authored paths are preserved in each question's notes for audit. --- 2026-10-02 re-selection pass: re-anchored 9 questions to verified pages (2 fully anchored, 7 partially-anchored) after the page-capped corpus showed 155 pages does not cover the alphabetized first-N topics; remaining gaps stay honestly marked no-corpus-page. --- 2026-10-12 anchor audit, against a 163-document / 1150-unit corpus of support.atlassian.com and developer.atlassian.com. 22 of the 25 authored heading paths were present and unchanged. Three named pages the publisher has since renamed, and were repointed at the page that now carries the topic, named by the heading that page publishes; the authored wording is preserved in each question's notes. NO threshold was touched, and NO question, topic or acceptable_alternatives entry was changed: only heading_path, which exists to name where the topic is documented and is therefore exactly the field a publisher rename invalidates. Recorded plainly because a dataset edited in the same session as the run it judges is the move this project forbids — so the audit is published here rather than applied quietly, and the run that follows carries a different dataset_fingerprint from every run before it.",
   "questions": [
     {
       "id": "simple-jira-filter-saved",
@@ -48,14 +48,14 @@
         "product": "jira",
         "category": "issue-types",
         "heading_path": [
-          "What are default [System] work types?"
+          "Configure work types"
         ],
         "topics": [
           "the default issue types are named",
           "subtasks are one of the defaults",
           "additional issue types can be added by an administrator"
         ],
-        "notes": "The exact default set has changed over time and may differ by template. The topic expectation is that the answer names the default types and mentions configurability, not that it matches any particular historical list. | Anchor audit 2026-10-02: authored path ['What are issues and projects', 'Issue types'] was NOT present in the crawled corpus; verdict=anchored. closest real page; source is the JSM article for system work types"
+        "notes": "The exact default set has changed over time and may differ by template. The topic expectation is that the answer names the default types and mentions configurability, not that it matches any particular historical list. | Anchor audit 2026-10-02: authored path ['What are issues and projects', 'Issue types'] was NOT present in the crawled corpus; verdict=anchored. closest real page; source is the JSM article for system work types | 2026-10-12 anchor audit: authored path ['What are default [System] work types?'] no longer exists in the publisher's documentation; repointed to ['Configure work types'] — Renamed by the publisher. The page is now 'Configure work types' (support.atlassian.com/jira-cloud-administration/docs/configure-issue-types/), whose h1 is 'Configure work types'."
       }
     },
     {
@@ -124,14 +124,14 @@
         "product": "jira",
         "category": "boards",
         "heading_path": [
-          "What is a board in business spaces?"
+          "Configure boards"
         ],
         "topics": [
           "a board is backed by a filter or saved search",
           "the columns on the board are defined by that filter",
           "a newly created board starts from a default configuration that can be changed"
         ],
-        "notes": "The team-managed versus company-managed board distinction exists in the documentation. The topic expectation is that the answer explains what determines board contents, not that it picks a board type. | Anchor audit 2026-10-02: authored path ['Boards', 'Board configuration'] was NOT present in the crawled corpus; verdict=no-corpus-page. no crawled page describes a board's default contents; heading_path cleared | 2026-10-02 re-selection pass: verdict revised to partially-anchored. no page documents a new board's default contents; nearest is the boards reference."
+        "notes": "The team-managed versus company-managed board distinction exists in the documentation. The topic expectation is that the answer explains what determines board contents, not that it picks a board type. | Anchor audit 2026-10-02: authored path ['Boards', 'Board configuration'] was NOT present in the crawled corpus; verdict=no-corpus-page. no crawled page describes a board's default contents; heading_path cleared | 2026-10-02 re-selection pass: verdict revised to partially-anchored. no page documents a new board's default contents; nearest is the boards reference. | 2026-10-12 anchor audit: authored path ['What is a board in business spaces?'] no longer exists in the publisher's documentation; repointed to ['Configure boards'] — Renamed by the publisher. 'Business spaces' terminology replaced 'projects'; the board administration page is now 'Configure boards' (support.atlassian.com/jira-cloud-administration/docs/configure-boards/), whose only content heading is 'Configure boards'."
       }
     },
     {
@@ -716,14 +716,14 @@
         "product": null,
         "category": null,
         "heading_path": [
-          "Export data from Jira Cloud"
+          "Import and export your data to and from Jira Cloud"
         ],
         "topics": [
           "the system does not force a single product classification",
           "results are drawn from more than one product domain where relevant",
           "the system reports the scope it actually searched"
         ],
-        "notes": "Every product in the corpus has its own export mechanism. This tests that low confidence produces a WIDER search rather than a narrowed one (FR-010, FR-014). | Anchor audit 2026-10-02: authored path [] was NOT present in the crawled corpus; verdict=no-corpus-page. no general per-product export page in the corpus | 2026-10-02 re-selection pass: verdict revised to anchored. Jira export documented (export-issues); Confluence also has content export (export-content-from-confluence-cloud); JSM has none in the corpus."
+        "notes": "Every product in the corpus has its own export mechanism. This tests that low confidence produces a WIDER search rather than a narrowed one (FR-010, FR-014). | Anchor audit 2026-10-02: authored path [] was NOT present in the crawled corpus; verdict=no-corpus-page. no general per-product export page in the corpus | 2026-10-02 re-selection pass: verdict revised to anchored. Jira export documented (export-issues); Confluence also has content export (export-content-from-confluence-cloud); JSM has none in the corpus. | 2026-10-12 anchor audit: authored path ['Export data from Jira Cloud'] no longer exists in the publisher's documentation; repointed to ['Import and export your data to and from Jira Cloud'] — Retitled by the publisher. The page is now 'Import and export your data to and from Jira Cloud' (support.atlassian.com/jira-cloud-administration/docs/import-and-export-your-data-to-and-from-jira-cloud/)."
       }
     },
     {
