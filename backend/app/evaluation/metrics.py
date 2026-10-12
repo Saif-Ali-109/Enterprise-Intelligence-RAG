@@ -25,6 +25,13 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+# "What is a claim, and does it carry a citation?" is defined once, in
+# `app.generation.claims`, because the runtime now enforces the same rule this
+# module measures. Two definitions of "a sentence with no marker" is one more than
+# a system like this should have: a fix to the predicate that reached only one of
+# them would show up as the metric disagreeing with the product.
+from app.generation.claims import MARKER, has_marker, substantive_sentences  # noqa: F401
+
 # ---------------------------------------------------------------------------
 # Topic-coverage primitives (T138)
 # ---------------------------------------------------------------------------
@@ -155,50 +162,9 @@ def retrieval_grades(
 # ---------------------------------------------------------------------------
 # Answer-quality metrics (T142)
 # ---------------------------------------------------------------------------
-
-_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
-
-#: A citation marker in either of the two forms this system produces. The prompt
-#: asks the model for `[E1]`; `resolve_answer_markers` rewrites those to the
-#: citation's rank (`[1]`) in the stored answer, so a metric that only recognises
-#: the prompt form reports every properly cited sentence as fabricated. The first
-#: live evaluation run failed its absolute-zero gate with `fabricated_fact_count: 3`
-#: on an answer whose three sentences were each correctly marked `[1] [2] [3]`.
-MARKER = re.compile(r"\[(?:E)?\d+\]")
-
-
-def substantive_sentences(answer: str) -> list[str]:
-    """The answer's claims, one per sentence, with their citation markers.
-
-    Two marker placements occur in practice and both are handled, because the
-    metric is only honest if it counts a claim as cited whichever shape the model
-    chose: `[1].` (marker before the full stop — what the live answers look like)
-    and `. [1] Claim two.` (marker leading the next sentence). In the second
-    shape the marker belongs to the claim it *follows*, so it is moved back to
-    that sentence and the text after it becomes the next claim — which, having
-    no marker of its own, is then correctly counted as uncited.
-
-    A sentence with fewer than four content words is not a claim: a lead-in
-    ("Note:"), a heading, or a marker alone must not be graded.
-    """
-    sentences: list[str] = []
-    for segment in (s.strip() for s in _SENTENCE_SPLIT.split(answer.strip())):
-        if not segment:
-            continue
-        prefix = ""
-        remainder = segment
-        while True:
-            match = MARKER.match(remainder)
-            if match is None:
-                break
-            prefix += f"{match.group(0)} "
-            remainder = remainder[match.end() :].strip()
-        if prefix and sentences:
-            sentences[-1] = f"{sentences[-1]} {prefix.strip()}"
-        if not remainder or len(content_tokens(remainder)) < 4:
-            continue
-        sentences.append(remainder)
-    return sentences
+# `substantive_sentences` and `MARKER` are imported at the top of this module
+# from `app.generation.claims`, and re-exported here so the metric and the
+# runtime that enforces it read as the same predicate.
 
 
 def citation_validity(validation_counts: dict[str, int]) -> float | None:
@@ -289,8 +255,15 @@ def citation_completeness(answer: str) -> float:
 
 
 def fabricated_facts(answer: str) -> int:
-    """Substantive sentences with no citation marker — a count, never a ratio (FR-066)."""
-    return sum(1 for s in substantive_sentences(answer) if not MARKER.search(s))
+    """Substantive sentences with no citation marker — a count, never a ratio (FR-066).
+
+    Since 2026-10-09 this is also enforced at request time: an answer that fails
+    it is refused rather than served, so a non-zero value here means the gate is
+    reading answers admitted before that change. It is kept as a gate because the
+    runtime check and this metric must agree, and because a gate that measured
+    only new answers would stop measuring the old ones.
+    """
+    return sum(1 for s in substantive_sentences(answer) if not has_marker(s))
 
 
 def answer_relevance(question: str, answer: str) -> float | None:

@@ -26,6 +26,7 @@ from app.chat.audit import record_query
 from app.core.config import get_settings
 from app.core.errors import AppError, ProviderError
 from app.core.logging import get_request_id, new_request_id
+from app.generation.claims import unmarked_claims
 from app.generation.generator import generate_answer
 from app.generation.provider import LLMProvider
 from app.generation.verifier import verify_answer
@@ -485,6 +486,54 @@ async def _answer(
             provider_error = str(exc)
             break
         if generated.answerable:
+            # **Every substantive claim must carry a marker, and the prompt already
+            # says so.** Nothing enforced it until 2026-10-12: the verification step
+            # asks whether the answer is SUPPORTED by the evidence — which an
+            # answer can be while carrying one uncited, actionable sentence. A
+            # live answer had five substantive sentences, three cited, and this:
+            #
+            #     "To set the restrictions, open the Share dialog on the page,
+            #      choose 'Restrict' and select whether you want to limit 'Can
+            #      view' or 'Can edit' to specific users or groups."
+            #
+            # The most useful sentence in the answer, and nothing stopped it
+            # reaching a reader. The evaluation caught it as a fabricated fact.
+            #
+            # The response is a retry inside the attempt loop that already exists
+            # for the verifier, and — if the retry still has an unmarked claim —
+            # a refusal. Refusing rather than serving is the deliberate cost:
+            # measured on 2026-10-04, the model marks claims in about half its
+            # answers, so this refuses roughly half of answerable questions whose
+            # citations resolved perfectly well. That was decided with the
+            # trade-off in hand rather than discovered afterwards.
+            if unmarked_claims(generated.answer):
+                # A retry is signalled by the second `generation_started`, emitted
+                # at the top of the next iteration (events.md §4).
+                if attempts < settings.generation_max_attempts:
+                    continue
+                uncited = unmarked_claims(generated.answer)
+                if inspect:
+                    trace_data.setdefault("generation", {})["uncited_claims"] = len(uncited)
+                _stream_refusal_through(emit)
+                return _refused(
+                    request_id=request_id,
+                    question=question,
+                    reason="GENERATION_FAILED",
+                    searched={
+                        "queries": rewrites,
+                        "products": searched_products(analysis),
+                        "applied_filters": applied_filters,
+                        "candidates_retrieved": len(all_candidates),
+                        "candidates_reranked": len(reranked),
+                        "evidence_selected": len(evidence),
+                    },
+                    leads=[],
+                    total_ms=int((time.perf_counter() - started) * 1000),
+                    trace=trace_data if inspect else None,
+                    query_analysis=query_analysis_payload,
+                    stages_ms=stages_ms,
+                    emit=emit,
+                )
             raw_evidence_text = "\n\n".join(u.hit.text for u in evidence)
             verification = await verify_answer(
                 generated.answer,

@@ -16,22 +16,26 @@ mean over the questions where a number exists.
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.logging import new_request_id, reset_request_id, set_request_id
+from app.core.logging import get_logger, new_request_id, reset_request_id, set_request_id
 from app.db.models import Document, DocumentUnit, EvaluationResult, EvaluationRun
 from app.db.session import get_session_factory
 from app.evaluation import metrics as m
 from app.evaluation.dataset import by_id, dataset_fingerprint, load_dataset
 from app.evaluation.metrics import PerformanceStats
+
+_log = get_logger(__name__)
 
 __all__ = [
     "RunInProgress",
@@ -167,6 +171,63 @@ def gate_outcome(
     return ("pass" if not failures else "fail"), failures
 
 
+async def _with_throttle_retry(
+    operation: Callable[[], Awaitable[Any]],
+    *,
+    question: str,
+    settings: Any,
+) -> Any:
+    """Run `operation`, retrying a throttled provider a bounded number of times.
+
+    **Why the runner retries and the request path does not.** Measured 2026-10-09
+    on run `fb88cffa`: 5 of 32 questions raised `ProviderRateLimited` from a
+    free-tier quota part-way through, so the quality metrics were computed over 27
+    questions and the run's p95 carried the throttling. A throttled provider is not
+    a property of the pipeline, and a measurement of the pipeline taken while the
+    provider is throttling it measures the throttle.
+
+    A user waiting on one question is told to try again; a run of thirty-two
+    questions cannot be, because a partial run produces partial metrics and says
+    nothing about the ones it skipped.
+
+    Only `PROVIDER_RATE_LIMITED` is retried, and the delay grows with each attempt.
+    A `PROVIDER_ERROR` is not: it means the provider returned something unusable,
+    and repeating the request would measure the provider's mood.
+
+    **The report stays honest.** A question that still fails after the retries
+    raises, and the caller records it as an error — so `error_rate` keeps meaning
+    "questions that could not be completed", not "questions that hit a throttle
+    once". A throttle that survives the retries is a real failure of the run to
+    produce its measurements.
+    """
+    from app.core.errors import ErrorCode
+
+    # Clamped to zero rather than to one: `eval_question_retries = 0` has to mean *no
+    # retries*, or the setting cannot be turned off — and a knob that cannot be
+    # turned off is not a knob.
+    attempts = max(0, int(getattr(settings, "eval_question_retries", 1)))
+    delay = float(getattr(settings, "eval_retry_delay_seconds", 8.0))
+
+    for attempt in range(attempts + 1):
+        try:
+            return await operation()
+        except Exception as exc:  # noqa: BLE001 - re-raised below
+            if getattr(exc, "code", None) != ErrorCode.PROVIDER_RATE_LIMITED:
+                raise
+            if attempt >= attempts:
+                raise
+            _log.warning(
+                "evaluation question throttled by the provider; retrying",
+                extra={
+                    "question_id": question,
+                    "attempt": attempt + 1,
+                    "attempts": attempts,
+                    "delay_seconds": delay * (attempt + 1),
+                },
+            )
+            await asyncio.sleep(delay * (attempt + 1))
+
+
 async def execute_run(
     run_id: uuid.UUID,
     *,
@@ -192,6 +253,7 @@ async def execute_run(
 
         dataset, raw = load_dataset(dataset_path)
         questions = by_id(dataset)
+        settings = get_settings()
 
         perf = PerformanceStats()
         per_question: list[dict[str, Any]] = []
@@ -212,13 +274,21 @@ async def execute_run(
             token = set_request_id(new_request_id())
             try:
                 try:
-                    chat_result = await run_chat(
-                        q.question,
-                        session=session,
-                        store=store,
-                        provider=provider,
-                        inspect=True,
-                        emit=None,
+                    chat_result = await _with_throttle_retry(
+                        # `partial` rather than a lambda: it binds this
+                        # iteration's question at construction, so nothing
+                        # depends on the closure being awaited immediately.
+                        partial(
+                            run_chat,
+                            q.question,
+                            session=session,
+                            store=store,
+                            provider=provider,
+                            inspect=True,
+                            emit=None,
+                        ),
+                        question=q.id,
+                        settings=settings,
                     )
                     payload = chat_result.payload
                 except Exception as exc:  # noqa: BLE001 - one question never sinks the run

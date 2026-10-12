@@ -348,6 +348,20 @@ class Settings(BaseSettings):
     # against in evaluation_runs.thresholds, so two runs are never compared
     # across different gates. A threshold may never be derived from the run it
     # is judging, or it stops being a gate.
+    # -- evaluation: provider throttling ------------------------------------
+    # **Measured 2026-10-09 on run `fb88cffa`**: 5 of 32 questions raised
+    # `PROVIDER_RATE_LIMITED` from a free-tier quota part-way through, so every
+    # quality metric was computed over 27 questions and p95 carried the
+    # throttling. The runner retries a throttled question this many times before
+    # recording it as an error; the request path does not retry, because a user
+    # waiting on one question is better served by being told to try again than by
+    # waiting longer.
+    #
+    # `0` restores the no-retry behaviour and is a real setting, not a disabled
+    # one — it is what makes the retry testable rather than assumed.
+    eval_question_retries: int = 2
+    eval_retry_delay_seconds: float = 8.0
+
     eval_gate_recall_at_5: float = 0.80
     eval_gate_precision_at_5: float = 0.60
     eval_gate_mrr: float = 0.75
