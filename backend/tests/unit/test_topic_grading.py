@@ -56,6 +56,43 @@ class TestCoverage:
             expected_heading_path=["Save your search as a filter"],
         )
 
+    def test_a_developer_expectation_matches_any_product(self) -> None:
+        """The same defect on the product axis, found 2026-10-13.
+
+        The gold set names `product: developer` for 7 questions; the corpus has 102
+        `jira`, 35 `confluence`, 27 `jsm` and no `developer` at all. A page under
+        `developer.atlassian.com/cloud/jira/platform/…` is labelled `jira` by the
+        registry, from the path segment that names the product — correctly, and
+        with the site's identity discarded. Comparing `developer` to that label
+        could never succeed, so 7 of 26 graded questions were unscoreable by
+        construction.
+        """
+        for product in ("jira", "confluence", "jsm", None):
+            hit = unit_covers_target(
+                product=product,
+                category="rest-api",
+                heading_path=["Issues"],
+                expected_product="developer",
+                expected_category="issue-api",
+                expected_heading_path=["Issues"],
+            )
+            assert hit, f"a developer expectation should accept a {product} page"
+
+    def test_a_named_product_is_still_compared_exactly(self) -> None:
+        """Narrowing from a site to a product is meaningful; the reverse is not.
+
+        `developer` is a wildcard because it names a site. `jira` names a product,
+        so a Confluence page is still a miss for a Jira question.
+        """
+        assert not unit_covers_target(
+            product="confluence",
+            category="user-documentation",
+            heading_path=["Create a space"],
+            expected_product="jira",
+            expected_category="spaces",
+            expected_heading_path=["Create a space"],
+        )
+
     def test_a_category_mismatch_is_no_longer_a_miss(self) -> None:
         """The amendment of 2026-10-12, asserted so it cannot drift back.
 

@@ -230,31 +230,71 @@ class PineconeReranker:
         # happens to the ranking when an id marker is mixed in.
         documents = [candidate.text for candidate in usable]
 
-        result = await asyncio.to_thread(
-            self._inference.rerank,
-            model=self._model,
+        result = await self._call(
             query=query,
             documents=documents,
-            rank_fields=["text"],
-            return_documents=False,
-            top_n=effective_top_n,
-            # Measured 2026-10-04 against the live service: with a 1000-token unit
-            # and a one-line question the service answers
-            #
-            #   400 INVALID_ARGUMENT Request contains a query+document pair with
-            #   3157 tokens, which exceeds the maximum token limit of 1024 for
-            #   each query+document pair. Consider setting "parameters.truncate"
-            #   to "END" to truncate long query+document pairs.
-            #
-            # The chunker's upper bound is 1000 tokens and the query adds to it,
-            # so *every* question about a maximum-size unit would fail the whole
-            # request — a refusal caused by a document's length, not its
-            # content. Truncating at the end keeps the beginning of the unit,
-            # which is where a heading and its first paragraph live.
-            parameters={"truncate": "END"},
+            effective_top_n=effective_top_n,
         )
 
         return self._hits_from(result, usable, effective_top_n)
+
+    async def _call(self, *, query: str, documents: list[str], effective_top_n: int) -> Any:
+        """Call the rerank service, translating its failures into our vocabulary.
+
+        Measured 2026-10-13: the organisation's rerank quota
+        (`429 RESOURCE_EXHAUSTED — reached the rerank request limit (500) for the
+        current month`) escaped uncaught and surfaced as
+        `500 INTERNAL_ERROR / "An unexpected error occurred."` A client could not
+        tell a quota from a defect, and the response carried nothing usable while
+        the log carried the vendor's message.
+
+        Two outcomes, chosen deliberately:
+
+        * **Rate limit → `ProviderRateLimited`.** The evaluation runner already
+          retries that code with backoff, which is right for a per-minute limit.
+        * **Everything else → `ProviderError`.** An unusable response is not made
+          better by repeating the request.
+
+        Both are raised `from None`: the vendor's exception text carries the account
+        identifier, and this system's errors must not (FR-042). The vendor's own
+        exception type is logged instead, where it belongs.
+        """
+        from app.core.errors import ProviderError, ProviderRateLimited
+
+        try:
+            return await asyncio.to_thread(
+                self._inference.rerank,
+                model=self._model,
+                query=query,
+                documents=documents,
+                rank_fields=["text"],
+                return_documents=False,
+                top_n=effective_top_n,
+                # Measured 2026-10-04 against the live service: with a 1000-token
+                # unit and a one-line question the service answers
+                #
+                #   400 INVALID_ARGUMENT Request contains a query+document pair
+                #   with 3157 tokens, which exceeds the maximum token limit of
+                #   1024 for each query+document pair.
+                #
+                # The chunker's upper bound is 1000 tokens and the query adds to
+                # it, so *every* question about a maximum-size unit would fail the
+                # whole request — a refusal caused by a document's length, not its
+                # content. Truncating at the end keeps the beginning of the unit,
+                # which is where a heading and its first paragraph live.
+                parameters={"truncate": "END"},
+            )
+        except Exception as exc:  # noqa: BLE001 - every vendor failure lands here
+            vendor = type(exc).__name__
+            _log.error(
+                "the rerank service refused the request",
+                extra={"model": self._model, "vendor_error": vendor},
+            )
+            if "ratelimit" in vendor.lower() or "toomanyrequests" in vendor.lower():
+                raise ProviderRateLimited() from None
+            raise ProviderError(
+                "The reranking service could not rank the retrieved passages."
+            ) from None
 
     def _hits_from(
         self,

@@ -263,14 +263,34 @@ class Settings(BaseSettings):
     embed_hard_token_limit: int = 2048
     embed_safety_factor: float = 0.75
 
-    # -- retrieval budget: 12 -> 6 -> 3-6 -----------------------------------
-    # Rerank top-N is 6, not 5, and the reason is arithmetic rather than
-    # preference: evidence is selected from the reranked set, so a 5-wide
-    # rerank cannot yield the 6 evidence units FR-020 asks for. The budget is
-    # 12 candidates -> 6 reranked -> 3 to 6 selected. The validator below turns
-    # a violation of that ordering into a startup error.
-    retrieval_candidate_pool: int = 12
-    retrieval_rerank_top_n: int = 6
+    # -- retrieval budget: 48 -> 12 -> 3-6 -----------------------------------
+    # **Re-measured 2026-10-13 against the 165-document corpus; it was
+    # calibrated for a 19-document one.** The budget was 12 -> 6, chosen when the
+    # corpus was 19 pages. Sweeping the pool size over the 25 graded questions,
+    # measuring how many expected targets are present *anywhere* in the pool
+    # (an upper bound on what reranking could achieve):
+    #
+    #     pool  12 ->  20 of 25 reachable
+    #     pool  24 ->  21
+    #     pool  48 ->  24
+    #     pool  96 ->  24     (no further gain; the limit is the corpus)
+    #
+    # 48 is where the curve stops, so 48 is the number. The previous 12 made four
+    # targets unreachable by construction — no reranker can return a candidate the
+    # search never fetched — and that is what held `recall_at_5` at 0.500.
+    #
+    # `rerank_top_n` follows, from 6 to 12: reranking 48 candidates down to 6
+    # would discard most of the reach the larger pool bought, and the sweep shows
+    # targets arriving at rank 8 that a wider rerank would lift. Evidence is still
+    # selected from 3 to 6 units, so nothing downstream widens — only the stage
+    # that decides which passages are seen at all.
+    #
+    # **Not verified end to end.** The measurement above is pool reachability,
+    # which needs no reranker; the organisation's rerank quota was exhausted when
+    # it was taken, so the effect on `recall_at_5` is a prediction until a run is
+    # possible. Recorded as a prediction rather than a result.
+    retrieval_candidate_pool: int = 48
+    retrieval_rerank_top_n: int = 12
     evidence_min_units: int = 3
     evidence_max_units: int = 6
 

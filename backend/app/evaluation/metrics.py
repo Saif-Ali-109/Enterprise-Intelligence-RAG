@@ -94,6 +94,15 @@ def heading_covers(expected: list[str], actual: list[str]) -> bool:
     return i == len(exp)
 
 
+#: A `product` value in the gold set that names a **documentation site**, not a
+#: product. The registry labels a page by the product its URL section documents —
+#: `developer.atlassian.com/cloud/jira/platform/...` becomes `jira` — which is more
+#: specific than the dataset's `developer`, so an exact comparison could never
+#: succeed. Measured 2026-10-13: 7 of 26 graded questions expected it, and the
+#: corpus contained no document labelled `developer`.
+_SITE_PRODUCT = "developer"
+
+
 def unit_covers_target(
     *,
     product: str | None,
@@ -121,19 +130,32 @@ def unit_covers_target(
     A gate that reports zero for a structural reason is worse than no gate,
     because it reads as a measurement.
 
-    The two remaining conditions are both about *identity*: the unit belongs to
-    the product the question is about, and its heading path covers the section the
-    topic is documented in. `heading_path` is the precise locator — it is what
-    the extractor derives from the page's own structure — and it is also the
-    field a publisher rename invalidates, which is why it is audited per dataset
-    version rather than pinned to a URL.
+    **The same defect on the product axis, found 2026-10-13 (FR-063).** The gold
+    set names `product: developer` for 7 of its questions; the corpus has 102
+    `jira`, 35 `confluence`, 27 `jsm` and **no `developer` at all**. A page under
+    `developer.atlassian.com/cloud/jira/platform/...` is labelled `jira` by the
+    registry, from the path segment that names the product — correctly, and with
+    the site's own identity discarded. So `developer` in the dataset is a *site*,
+    not a product, and comparing it against a product label can never succeed.
+
+    It is therefore treated as a site label and satisfied by any document: the
+    question is about the API documentation, and the corpus's product label is
+    more specific than the dataset's. `jira`, `confluence` and `jsm` continue to
+    be compared exactly — narrowing from a site to a product is meaningful;
+    narrowing from a product to a site cannot be.
+
+    The remaining condition is about *identity*: the unit's heading path covers the
+    section the topic is documented in. `heading_path` is the precise locator — it
+    is what the extractor derives from the page's own structure — and it is also
+    the field a publisher rename invalidates, which is why it is audited per
+    dataset version rather than pinned to a URL.
 
     `expected_category` stays in the dataset and in this signature. It is
     descriptive: it names the topic area a human reads to understand the
     question, and removing it from the file would lose information while changing
     no measurement.
     """
-    if expected_product is not None:
+    if expected_product is not None and expected_product != _SITE_PRODUCT:
         if product is None or normalise(product) != normalise(expected_product):
             return False
     if expected_heading_path:
