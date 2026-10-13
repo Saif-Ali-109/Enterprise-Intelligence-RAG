@@ -16,87 +16,55 @@ Two rules govern everything below:
 
 ## 1. Measured results
 
-Two runs, and the reason the second one cannot answer the question the first one
-raised. Nothing here is illustrative.
+The current run measures the pipeline rather than a broken harness, and it
+**fails its gate**. Nothing here is illustrative.
 
-### Run `3bbebca5` — 2026-10-12, dataset 1.3.0, fingerprint `f2a9fd38…`
+### Run `227cb017` — 2026-10-13, dataset 1.3.0, fingerprint `f2a9fd38…`
 
-163 documents, 1150 units. **`error_rate = 0.625`**, and that number governs
-everything else in the row.
-
-| Metric | Measured | Threshold | Gate |
-|---|---|---|---|
-| `recall_at_5` | 0.000 | ≥ 0.80 | **fail** |
-| `precision_at_5` | 0.000 | ≥ 0.60 | **fail** |
-| `mrr` | 0.000 | ≥ 0.75 | **fail** |
-| `cross_product_domain_coverage` | 1.000 | ≥ 0.80 | pass |
-| `citation_validity` | `null` | ≥ 0.98 | not applicable |
-| `claim_coverage` | `null` | ≥ 0.85 | not applicable |
-| `faithfulness` | `null` | ≥ 0.90 | not applicable |
-| `unsupported_refusal_rate` | 1.000 | = 1.00 | pass |
-| `fabricated_fact_count` | **0** | = 0 | **pass** |
-| `invalid_citation_count` | **0** | = 0 | **pass** |
-| `p50_latency_ms` | 127 864 | — | reported |
-| `p95_latency_ms` | **139 022** | ≤ 8000 | **fail** |
-| `error_rate` | **0.625** | — | reported |
-
-Zero questions were answered. Nineteen of the twenty errors were
-`ProviderRateLimited` — the Groq free-tier quota, exhausted after a day of
-evaluation runs — and each of those questions waited out the runner's retry
-backoff, which is where the 128-second median comes from. **This run measures a
-throttled provider, not the pipeline**, and its `recall_at_5 = 0.000` is a
-statement about 11 graded questions out of 32, not about retrieval.
-
-### Run `72a40bc7` — 2026-10-12, dataset 1.3.0, before the FR-063 amendment
-
-163 documents, 1150 units. `error_rate = 0.156`, four questions answered.
+165 documents, 1150 units. 7 answered, 23 refused, 2 raised.
 
 | Metric | Measured | Threshold | Gate |
 |---|---|---|---|
-| `recall_at_5` / `precision_at_5` / `mrr` | 0.000 | 0.80 / 0.60 / 0.75 | **fail** |
-| `cross_product_domain_coverage` | 1.000 | ≥ 0.80 | pass |
+| `recall_at_5` | **0.500** | ≥ 0.80 | **fail** |
+| `precision_at_5` | **0.269** | ≥ 0.60 | **fail** |
+| `mrr` | **0.455** | ≥ 0.75 | **fail** |
+| `cross_product_domain_coverage` | **0.667** | ≥ 0.80 | **fail** |
 | `citation_validity` | 1.000 | ≥ 0.98 | pass |
-| `claim_coverage` | 0.000 | ≥ 0.85 | **fail** |
-| `faithfulness` | 0.500 | ≥ 0.90 | **fail** |
+| `claim_coverage` | **0.000** | ≥ 0.85 | **fail** |
+| `faithfulness` | 0.586 | ≥ 0.90 | **fail** |
 | `unsupported_refusal_rate` | 1.000 | = 1.00 | pass |
 | `fabricated_fact_count` | **0** | = 0 | **pass** |
 | `invalid_citation_count` | **0** | = 0 | **pass** |
-| `p50_latency_ms` | 20 289 | — | reported |
-| `p95_latency_ms` | 77 175 | ≤ 8000 | **fail** |
-| `error_rate` | 0.156 | — | reported |
+| `p50_latency_ms` | 16 663 | — | reported |
+| `p95_latency_ms` | **95 221** | ≤ 8000 | **fail** |
+| `error_rate` | 0.062 | — | reported |
 
-**The absolute zeros hold.** That is the first run in which they were tested
-against answers rather than against a corpus too thin to produce any.
+**Retrieval is no longer structurally zero.** It read 0.000 in every earlier run;
+it now reads 0.500 — 13 hits across 26 graded questions — after three changes
+whose effects are separable in the record below. It is still below the 0.80 gate,
+and it is reported as failing.
 
-### Why retrieval read 0.000, measured rather than inferred
+### What moved, and why
 
-Three separate causes, found in this order, each established from the registry
-and `query_logs` rather than from a hypothesis.
-
-**1. The gold set's categories were outside the system's vocabulary.** The dataset
-names `filters`, `spaces`, `page-permissions`, `issue-api`, `oauth`, `boards`,
-`permissions`, `issue-types`, `notifications`, `automation`, `projects`,
-`troubleshooting`, `issues-and-requests`, `request-management`, `rate-limiting`,
-`search-api`, `service-desk-api` for 21 of its 25 questions. `DocumentCategory`
-has six URL-derived values. Measured on 164 indexed documents: `jira /
-user-documentation` 47, `jira / rest-api` 47, `confluence / user-documentation`
-33, `jsm / user-documentation` 25, and eight pages across `root`, `developer` and
-`general`. **Not one expected category was present**, so the grading condition
-was unsatisfiable by construction.
-
-Amended 2026-10-12 (FR-063): a hit requires the product and the heading path;
-`expected_category` stays in the dataset as a descriptive label. The dataset's
-own 2026-10-02 audit had re-derived heading paths from real pages and never
-applied the same treatment to `category`.
+**1. The grading condition was unsatisfiable.** The gold set names document
+categories — `filters`, `spaces`, `page-permissions`, `issue-api`, `oauth`,
+`boards`, `permissions`, `issue-types`, `notifications`, `automation`,
+`projects`, `troubleshooting`, `issues-and-requests`, `request-management`,
+`rate-limiting`, `search-api`, `service-desk-api` — and `DocumentCategory` has six
+URL-derived values. Measured on the indexed corpus: `jira / user-documentation`
+47, `jira / rest-api` 47, `confluence / user-documentation` 33, `jsm /
+user-documentation` 25, and a handful across `root`, `developer`, `general`. **Not
+one expected category was present**, so the condition could never be true.
+Amended 2026-10-12 (FR-063): a hit needs the product and the heading path;
+`expected_category` stays in the dataset as a descriptive label.
 
 **2. The dataset's heading paths had rotted.** Atlassian renamed the pages the
 gold set targets. Of 25 expected heading paths, 19 did not exist under that
-wording in the live corpus — "service space agents" is now "service project
-agents", "Delete, restore, or purge a content item" is now "…a page". Dataset
-1.3.0 repoints three and audits the rest; 22 of 25 are now present.
+wording in the live corpus. Dataset 1.3.0 repoints three against verified pages
+and records the authored wording in each question's notes.
 
 **3. A confident filter was cutting the corpus to one candidate.** From
-`query_logs`, live:
+`query_logs`:
 
 ```
 question:       How do I create a new space in Confluence Cloud?
@@ -104,45 +72,68 @@ applied filter: {product: confluence, category: general}
 retrieved:      1 candidate   reranked: 1   evidence: 1
 ```
 
-The analyzer was confident, and `general` is a real category value — but 2 of 33
-indexed Confluence pages carry `category = general`. The filter cut a 33-page
-section to a single candidate, which cannot fill `evidence_min_units = 3`, so the
-answer was gone before the reranker saw it. `should_widen()` fired only on *zero*
-candidates, so one candidate passed as success. Fixed 2026-10-12: a filtered pool
-smaller than `evidence_min_units` now widens once.
+The analyzer was confident and `general` is a real value, but 2 of 33 indexed
+Confluence pages carry `category = general`. `should_widen()` fired only on *zero*
+candidates, so one candidate — below the minimum evidence count of 3 — passed as
+success. It now widens when the filtered pool is smaller than `evidence_min_units`.
 
-**This last fix is verified by unit test and measurement, not by a live run** —
-the provider quota is exhausted, and the analyzer's classification needs the
-provider before retrieval can be reached with a real analysis.
+**A fourth cause was found while verifying the third.** The same filter question
+now refuses again, and the trace says why: the expected page *is* retrieved, with
+heading path `Save your search as a filter` — but labelled `product=jsm`, because
+that slug is published under both the Jira Service Management and the Jira
+Software sections and the corpus had only the JSM copy. Indexing the Jira Software
+version changed that question from **refused** to **answered with a citation** in
+one step. The corpus now covers 165 documents.
 
-### What is established, and what is not
+### What still fails, and the honest reading
 
-**Established.** The absolute-zero gates hold on a corpus that produces answers.
-Citation validity is 1.000 — every citation the model issued resolved to evidence
-that was actually served. All four deliberately-unsupported questions are refused.
-Cross-product coverage is 1.000. Retrieval's zero was structural, and the three
-causes are named with the measurements that found them.
+**Recall 0.500 against 0.80.** 13 of 26 graded questions hit. The 13 misses split
+into two groups, and the split is legible in the run:
 
-**Not established.** Whether the FR-063 amendment and the widening fix actually
-raise recall. Both landed after `72a40bc7`, and `3bbebca5` was too degraded by
-provider throttling to measure them. **The honest statement is that the retrieval
-gates have not yet had a clean run**, and the next one should be started when the
-provider quota is available.
+- **8 were refused**, so the pipeline found evidence and declined it — the gate,
+  the verifier, or the uncited-claim check. `simple-jira-issue-types`,
+  `perms-jira-project-role`, `simple-jira-board-default`, `perms-jsm-agent-permission`
+  and four more. These are answer-quality questions, not retrieval ones.
+- **3 were answered but missed**, which is the opposite problem:
+  `api-jira-jql-search`, `api-jira-ratelimit`, `cross-jira-api-auth` — all three
+  target `developer.atlassian.com`, where the REST reference pages extract into
+  many small heading-scoped units and the expected section is not what surfaces.
+
+**Cross-product coverage fell to 0.667** from 1.000. With fewer questions reaching
+generation, a single missed cross-product question moves the ratio a long way; on
+two questions of data it is not a measurement of anything. It is reported as
+failing.
+
+**Claim coverage 0.000 and faithfulness 0.586** over 7 answers. Claim coverage
+expects each of a question's `topics` to appear in the answer text, and no answer
+covered any. On 7 answers this says the answers are short and general, not that the
+grading is wrong — but 7 answers is a thin basis for a quality verdict, and it is
+the metric most in need of a larger corpus and more answerable questions.
+
+**p95 95 221 ms against an 8000 ms target**, p50 16 663 ms. Generation dominates,
+and the uncited-claim retry doubles it on every question the model answers without
+inline markers — the cost of the enforcement that made the absolute zero hold. Two
+questions raised `ProviderError`; a provider error is not retried by design.
+
+### What is established
+
+The **absolute-zero gates hold**: zero fabricated facts and zero invalid
+citations, with 7 answers that could have violated them. `citation_validity` is
+1.000 — every citation the model issued resolved to evidence that was actually
+served. All four deliberately-unsupported questions are refused. Retrieval is
+measured, and measured short of its gate.
 
 ### Earlier runs
 
 | Run | Dataset | Corpus | Outcome | Notable |
 |---|---|---|---|---|
-| `dfa3a1fd` | 1.1.0 | 19 docs / 149 units | fail | All questions refused; nothing generated, so the absolute zeros were untested |
+| `dfa3a1fd` | 1.1.0 | 19 docs / 149 units | fail | All refused; nothing generated, so the absolute zeros were untested |
 | `b6d452a3` | 1.2.0 | 19 docs / 149 units | fail | Same, inside the container image |
-| `68350c4a` | 1.2.0 | 132 docs / 841 units | fail | Navigation still in the corpus: a published answer asserted an API version, grounded in a breadcrumb containing `REST API v2` |
-| `fb88cffa` | 1.2.0 | 157 docs / 1100 units | fail | Navigation filter and fingerprint fix landed; that version question now refuses. Three uncited claims — the absolute zero failed |
-| `72a40bc7` | 1.3.0 | 163 docs / 1150 units | fail | **Absolute zero passes.** Retrieval still 0.000 for the three structural reasons above |
-| `3bbebca5` | 1.3.0 | 163 docs / 1150 units | fail | Provider quota exhausted; `error_rate = 0.625`. Not a measurement of the pipeline |
-
-The progression is the point: the absolute zeros looked green for two runs only
-because nothing was answered, and the retrieval zeros were structural from the
-first run.
+| `68350c4a` | 1.2.0 | 132 docs / 841 units | fail | Navigation still indexed: a published answer asserted an API version, grounded in a breadcrumb containing `REST API v2` |
+| `fb88cffa` | 1.2.0 | 157 docs / 1100 units | fail | Navigation filter and fingerprint fix landed; three uncited claims — the absolute zero failed |
+| `72a40bc7` | 1.3.0 | 163 docs / 1150 units | fail | Absolute zero passes for the first time; retrieval still 0.000 for the three structural reasons above |
+| `3bbebca5` | 1.3.0 | 163 docs / 1150 units | fail | Provider quota exhausted, `error_rate = 0.625` — not a measurement of the pipeline |
+| **`227cb017`** | **1.3.0** | **165 docs / 1150 units** | **fail** | **Retrieval measured: 0.500.** Absolute zeros hold; 7 gates fail |
 
 ---
 

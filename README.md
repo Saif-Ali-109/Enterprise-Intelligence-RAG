@@ -97,27 +97,25 @@ Five views, in the order a reviewer should meet them.
 
 ### Measured results
 
-The current evaluation runs **fail their gates**, and are reported that way.
+The current evaluation run **fails its gate**, and is reported that way: 165
+documents, 1150 units, 32 questions.
 
 **Passing:** zero fabricated facts and zero invalid citations — the absolute-zero
-gates, which now hold against answers rather than against a corpus too thin to
-produce any; all four deliberately-unsupported questions refused; citation
-validity 1.000; cross-product coverage 1.000.
+gates, verified against seven answers that could have violated them; citation
+validity 1.000; all four deliberately-unsupported questions refused.
 
-**Failing:** recall@5 / precision@5 / MRR, claim coverage, and p95 latency.
+**Failing:** recall@5 0.500 (target 0.80), precision@5 0.269 (0.60), MRR 0.455
+(0.75), cross-product coverage 0.667 (0.80), claim coverage 0.000 (0.85),
+faithfulness 0.586 (0.90), p95 95 221 ms (8000).
 
-The retrieval zeros are structural, not a ranking result, and each cause was
-measured: the gold set expected document categories the system's six-value
+Retrieval read 0.000 in every earlier run, for three reasons that were each
+measured and fixed: the gold set named document categories the system's six-value
 vocabulary cannot produce; the publisher had renamed 19 of the 25 expected
-heading paths; and a confident filter was cutting the Confluence corpus from 33
-pages to a single candidate. The first two are fixed (FR-063 amended, dataset
-1.3.0 audited) and the third is fixed (a filter that leaves less than the
-minimum evidence count now widens). **None of the three fixes has yet had a clean
-run to measure it** — the provider quota was exhausted — so the retrieval gates
-have not been shown to pass, and this README does not claim they do.
+heading paths; and a confident filter was cutting a 33-page section to one
+candidate. It now reads 0.500 — short of the gate, and reported as short.
 
-The numbers, the evidence for each cause, and what remains unmeasured are in
-[docs/EVALUATION.md](docs/EVALUATION.md) §1.
+The numbers, the evidence for each cause, and which metrics rest on too few
+answers to be read confidently are in [docs/EVALUATION.md](docs/EVALUATION.md) §1.
 
 ---
 
