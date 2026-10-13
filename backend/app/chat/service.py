@@ -829,6 +829,26 @@ async def _answer(
         "citations": citations_payload,
         "timing": {"total_ms": int((time.perf_counter() - started) * 1000), "stages_ms": stages_ms},
         "query_analysis": query_analysis_payload,
+        # The searched scope is reported here too, not only on a refusal.
+        # Measured 2026-10-13: this block was missing from the answered payload,
+        # so `record_query` read `searched.get("candidates_retrieved", 0)` as 0 and
+        # every **answered** question was audited as having retrieved nothing —
+        # while the inspection trace beside it reported 12 candidates. An audit
+        # trail that contradicts itself on the successful path is worse than no
+        # audit trail: it is believed, and it is wrong about exactly the requests
+        # that worked.
+        #
+        # The contract's `searched` description says "so a refusal is actionable
+        # rather than opaque". That was true and incomplete: a reader asking why
+        # an answer cited a particular page needs the same scope.
+        "searched": {
+            "queries": rewrites,
+            "products": searched_products(analysis),
+            "applied_filters": applied_filters,
+            "candidates_retrieved": len(all_candidates),
+            "candidates_reranked": len(reranked),
+            "evidence_selected": len(evidence),
+        },
     }
     if inspect:
         payload["trace"] = trace_data
