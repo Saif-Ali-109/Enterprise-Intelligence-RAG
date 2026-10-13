@@ -652,11 +652,16 @@ class TestNoSecretsInTheContract:
 
 class TestContractInvariants:
     def test_the_retrieval_budget_is_the_documented_one(self) -> None:
-        """12 candidates, 6 reranked, 3–6 evidence units.
+        """48 candidates, 12 reranked, 3–6 evidence units.
 
         Asserted in three places, because a mismatch between the documented
         budget and the running one produces results nobody can interpret: the
         numbers in an answer stop meaning what the documentation says.
+
+        The budget was 12 -> 6 until 2026-10-13, re-measured against the
+        165-document corpus it had been calibrated for a 19-document one: at 12,
+        four of the 25 gold-set targets were unreachable by construction, because
+        no reranker returns a candidate the search never fetched.
 
         The response uses the *contract's* key names (`evidence_min`,
         `evidence_max`) while `Settings` uses `evidence_min_units`,
@@ -669,7 +674,7 @@ class TestContractInvariants:
 
         settings = get_settings()
 
-        assert (settings.retrieval_candidate_pool, settings.retrieval_rerank_top_n) == (12, 6)
+        assert (settings.retrieval_candidate_pool, settings.retrieval_rerank_top_n) == (48, 12)
         assert (settings.evidence_min_units, settings.evidence_max_units) == (3, 6)
 
         # The contract must document the same budget, under its own names.

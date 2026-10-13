@@ -105,7 +105,7 @@ paths:
                     data: {"request_id":"0f3c...","detected_product":"jira","detected_category":"billing","classification_confidence":{"product":0.91,"category":0.88,"intent":0.94},"rewrite_queries":["How do I set up billing?"]}
 
                     event: retrieval_started
-                    data: {"request_id":"0f3c...","candidate_pool":12}
+                    data: {"request_id":"0f3c...","candidate_pool":48}
 
                     event: retrieval_completed
                     data: {"request_id":"0f3c...","candidates_retrieved":0,"applied_filters":{"product":{"$in":["jira"]}}}
@@ -591,8 +591,8 @@ paths:
                     additionalProperties: false
                     required: [candidate_pool, rerank_top_n, evidence_min, evidence_max, filters_enabled]
                     properties:
-                      candidate_pool: { type: integer, examples: [12] }
-                      rerank_top_n: { type: integer, examples: [6] }
+                      candidate_pool: { type: integer, examples: [48] }
+                      rerank_top_n: { type: integer, examples: [12] }
                       evidence_min: { type: integer, examples: [3] }
                       evidence_max: { type: integer, examples: [6] }
                       min_rerank_score:

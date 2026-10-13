@@ -254,16 +254,18 @@ class TestSecretPresenceShape:
 
 class TestConfigurationContents:
     async def test_the_retrieval_budget_is_reported_as_effective(self, app_with_sentinels) -> None:
-        """An operator needs to see 12 -> 6 -> 3-6 to understand a result set.
+        """An operator needs to see 48 -> 12 -> 3-6 to understand a result set.
 
         This is the triple the spec and contract name; if it ever reads
-        differently here, the contract and the running system have diverged.
+        differently here, the contract and the running system have diverged. The
+        pool was 12 and the rerank width 6 until the 2026-10-13 re-measurement
+        against the 165-document corpus.
         """
         response = await _get(app_with_sentinels)
 
         retrieval = response.json()["retrieval"]
-        assert retrieval["candidate_pool"] == 12
-        assert retrieval["rerank_top_n"] == 6
+        assert retrieval["candidate_pool"] == 48
+        assert retrieval["rerank_top_n"] == 12
         assert (retrieval["evidence_min"], retrieval["evidence_max"]) == (3, 6)
 
     async def test_minimum_score_gates_default_to_null(self) -> None:
@@ -517,7 +519,7 @@ class TestRetrievalBudgetChain:
     `6` in the chat path for a test to patch around.
     """
 
-    def test_the_default_chain_is_twelve_six_three_to_six(
+    def test_the_default_chain_is_forty_eight_twelve_three_to_six(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from app.core.config import Settings
@@ -530,8 +532,14 @@ class TestRetrievalBudgetChain:
         ):
             monkeypatch.delenv(name, raising=False)
         settings = Settings(_env_file=None)  # type: ignore[call-arg]
-        assert settings.retrieval_candidate_pool == 12
-        assert settings.retrieval_rerank_top_n == 6
+        # Was 12 -> 6 until 2026-10-13, when the pool was re-measured against the
+        # 165-document corpus it had been calibrated for a 19-document one:
+        # 12 -> 20 of 25 gold-set targets reachable anywhere in the pool,
+        # 48 -> 24. At 12 four targets were unreachable by construction — no
+        # reranker returns a candidate the search never fetched. `scripts/
+        # pool_sweep.py` produced that table.
+        assert settings.retrieval_candidate_pool == 48
+        assert settings.retrieval_rerank_top_n == 12
         assert (settings.evidence_min_units, settings.evidence_max_units) == (3, 6)
 
     def test_a_rerank_budget_larger_than_the_pool_refuses_to_start(
