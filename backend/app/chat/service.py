@@ -413,6 +413,69 @@ async def _answer(
     )
     stages_ms["select_ms"] = int((time.perf_counter() - t0) * 1000)
 
+    # The retrieval and reranking artifacts are recorded **here**, once, from
+    # what actually happened — not at the end of the answered path where they
+    # used to live. Measured 2026-10-13: an `inspect: true` refusal returned a trace
+    # whose retrieval and reranking stages were both empty objects, while the same
+    # response's `searched` block reported 12 candidates retrieved and 6 reranked.
+    # The pre-generation refusal branch was worse: it wrote `"candidates": []`
+    # unconditionally, so an operator inspecting a refusal concluded retrieval had
+    # found nothing, when in most cases it had found plenty and the refusal came
+    # later — from the verifier, or from the uncited-claim check.
+    #
+    # This is the only place that knows all of it, and every exit below inherits it.
+    if inspect:
+        # NOTE: no unit text anywhere here. Page text is not stored in this
+        # database by design (the registry holds provenance, the store holds the
+        # text), and the trace persists into query_logs — so it carries ids, counts
+        # and scores, never the corpus itself.
+        trace_data["retrieval"] = {
+            "queries": queries_executed,
+            "applied_filters": applied_filters,
+            "widened": widened,
+            "candidates": [
+                {
+                    "id": c.id,
+                    "product": c.product,
+                    "category": c.category,
+                    "heading_path": list(c.heading_path),
+                    "title": c.title,
+                    "retrieval_score": c.retrieval_score,
+                }
+                for c in all_candidates
+            ],
+        }
+        trace_data["reranking"] = {
+            "model": settings.pinecone_rerank_model,
+            "submitted": len(all_candidates),
+            "candidates": [
+                {
+                    "id": r.id,
+                    "retrieval_score": r.retrieval_score,
+                    "rerank_score": r.rerank_score,
+                }
+                for r in reranked
+            ],
+            # Provenance is deliberately not repeated here. `RerankedHit` carries
+            # the store-side metadata record, which Pinecone returns empty
+            # (measured: `Index.search` returns `metadata=None`), so reading
+            # heading paths off it would print blanks. The retrieval stage above
+            # lists every candidate with its product and heading path, and these
+            # entries join to it on `id`.
+            "evidence_selected": len(evidence),
+        }
+        trace_data.setdefault("generation", {"attempts": 0, "verification": None})
+        trace_data.setdefault(
+            "citations",
+            {
+                "valid": 0,
+                "stripped": 0,
+                "repaired": 0,
+                "rejected_identifiers": [],
+                "granularity": "none",
+            },
+        )
+
     # ── 4b. the quality gate (FR-007) ------------------------------------------
     # The refusal lives here, *before* generation, which is the point: a pool
     # that cannot support an answer is never shown to the model, so there is
@@ -420,29 +483,11 @@ async def _answer(
     decision = gate_evidence(reranked, thresholds=settings, selected=evidence)
     if not evidence or decision.refused:
         _stream_refusal_through(emit)
-        if inspect:
-            trace_data.update(
-                {
-                    "retrieval": {
-                        "queries": queries_executed,
-                        "widened": widened,
-                        "candidates": [],
-                    },
-                    "reranking": {
-                        "model": settings.pinecone_rerank_model,
-                        "submitted": len(all_candidates),
-                        "candidates": [],
-                    },
-                    "generation": {"attempts": 0, "verification": None},
-                    "citations": {
-                        "valid": 0,
-                        "stripped": 0,
-                        "repaired": 0,
-                        "rejected_identifiers": [],
-                        "granularity": "none",
-                    },
-                }
-            )
+        # The trace was recorded above, from the candidates that were actually
+        # retrieved and reranked. Overwriting it with empty lists here would tell an
+        # operator that retrieval found nothing, which is the opposite of what
+        # happened whenever the gate refused on *score* rather than on an empty
+        # pool.
         return _refused(
             request_id=request_id,
             question=question,
@@ -743,35 +788,19 @@ async def _answer(
         # database by design (the registry holds provenance, the store holds the
         # text), and the trace persists into query_logs — so it carries ids,
         # counts and scores, never the corpus itself.
-        trace_data["retrieval"] = {
-            "queries": queries_executed,
-            "applied_filters": applied_filters,
-            "widened": widened,
-            "candidates": [
-                {
-                    "id": c.id,
-                    "product": c.product,
-                    "category": c.category,
-                    "heading_path": list(c.heading_path),
-                    "title": c.title,
-                    "retrieval_score": c.retrieval_score,
-                }
-                for c in all_candidates
-            ],
-        }
-        trace_data["reranking"] = {
-            "model": settings.pinecone_rerank_model,
-            "submitted": len(all_candidates),
-            "candidates": [
-                {
-                    "id": r.id,
-                    "retrieval_score": r.retrieval_score,
-                    "rerank_score": r.rerank_score,
-                    "rank": r.rank,
-                }
-                for r in reranked
-            ],
-        }
+        # `retrieval` and `reranking` were recorded once, before the quality gate,
+        # so that a refusal carries the same candidates an answer would. Only the
+        # generation and citation stages are added here, because only this path has
+        # them.
+        trace_data["reranking"]["candidates"] = [
+            {
+                "id": r.id,
+                "retrieval_score": r.retrieval_score,
+                "rerank_score": r.rerank_score,
+                "rank": r.rank,
+            }
+            for r in reranked
+        ]
         trace_data["generation"] = {
             "attempts": attempts,
             "verification": verification.classification if verification else None,
